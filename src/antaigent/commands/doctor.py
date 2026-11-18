@@ -1,4 +1,6 @@
-"""`antai doctor`: check Ollama, the models, GPU use and the code parsers."""
+"""`antai doctor`: check Ollama, the models, GPU use, the code parsers and optional extras."""
+
+import importlib.util
 
 import typer
 
@@ -45,4 +47,15 @@ def doctor() -> None:
         console.print(f"[yellow]WARN[/] Code parsers not installed for: {', '.join(missing)}. Run: antai setup")
     else:
         console.print("[green]OK[/]   Code parsers installed")
+
+    for module, purpose, hint in (
+        ("duckdb", "data file profiling (CSV, Parquet, Excel)", "uv pip install duckdb"),
+        ("openpyxl", "Excel profiling", "uv pip install openpyxl"),
+        ("watchfiles", "antai watch", "uv pip install watchfiles"),
+        ("PySide6", "the desktop app (antai gui)", 'uv pip install -e ".[gui]"'),
+    ):
+        if importlib.util.find_spec(module) is not None:
+            console.print(f"[green]OK[/]   {module} for {purpose}")
+        else:
+            console.print(f"[yellow]WARN[/] {module} isn't installed, so {purpose} is unavailable. Run: {hint}")
     raise typer.Exit(0 if healthy else 1)
