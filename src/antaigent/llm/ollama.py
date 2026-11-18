@@ -72,10 +72,25 @@ class Ollama:
         )
         return data["embeddings"]
 
+    def complete(
+        self, model: str, messages: list[dict[str, str]], *, think: str, num_ctx: int, keep_alive: str
+    ) -> tuple[str, dict[str, Any]]:
+        """Return the whole reply (without reasoning) and the final stats."""
+        content: list[str] = []
+        stats: dict[str, Any] = {}
+        for kind, payload in self.chat(model, messages, think=think, num_ctx=num_ctx, keep_alive=keep_alive):
+            if kind == "content":
+                content.append(payload)
+            elif kind == "done":
+                stats = payload
+        return "".join(content).strip(), stats
+
     def chat(
         self, model: str, messages: list[dict[str, str]], *, think: str, num_ctx: int, keep_alive: str
     ) -> Iterator[tuple[str, Any]]:
-        """Stream a reply as ("thinking", text), ("content", text) and finally ("done", stats)."""
+        """Stream a reply as ("thinking", text), ("content", text) and finally ("done", stats).
+
+        num_ctx should stay the same between calls: Ollama reloads the model when it changes."""
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,

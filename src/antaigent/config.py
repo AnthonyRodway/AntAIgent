@@ -13,6 +13,8 @@ class Settings:
     ollama_url: str = "http://127.0.0.1:11434"
     chat_model: str = "gpt-oss:20b"
     embed_model: str = "nomic-embed-text"
+    # Model that writes file, folder and project summaries; "" means the chat model.
+    summary_model: str = ""
     # Reasoning effort for models that support levels (gpt-oss: low | medium | high).
     # "true"/"false" toggle thinking on other models; "" leaves it to the model's default.
     think: str = "low"
@@ -41,3 +43,7 @@ class Settings:
             else:
                 overrides[f.name] = raw
         return cls(**overrides)
+
+    @property
+    def summarizer(self) -> str:
+        return self.summary_model or self.chat_model
