@@ -11,9 +11,8 @@ from rich.text import Text
 from ..config import Settings
 from ..llm.embed import Embedder
 from ..llm.ollama import Ollama, OllamaError
-from ..query.answer import build_messages
+from ..query.context import gather
 from ..query.retrieval import Hit
-from ..query.retrieval import search as hybrid_search
 from ._common import ProjectOption, console, fail, open_project, require_models
 
 
@@ -36,22 +35,29 @@ def ask(
         embedder = Embedder(client, settings.embed_model, settings.keep_alive, settings.embed_batch)
         try:
             with console.status("Searching the index..."):
-                hits = hybrid_search(store, embedder, question, k or settings.top_k)
+                context = gather(
+                    store, embedder, question,
+                    project=root.name, k=k or settings.top_k, context_chars=settings.context_chars,
+                )
         except OllamaError as exc:
             fail(str(exc))
-    if not hits:
+    if not context.hits:
         fail("The index is empty, so there's nothing to answer from. Check `antai status`.")
 
-    messages, used = build_messages(question, hits, root.name, settings.context_chars)
-    console.print(f"[dim]{root} | {len(used)} excerpts | {chat_model}[/]", highlight=False)
+    extras = [f"{len(context.hits)} excerpts"]
+    if context.symbols or context.files:
+        extras.append("graph: " + ", ".join(context.symbols + context.files))
+    if context.summaries:
+        extras.append(f"{len(context.summaries)} summaries")
+    console.print(f"[dim]{root} | {' | '.join(extras)} | {chat_model}[/]", highlight=False)
     try:
         stats = _stream_answer(
-            client, chat_model, messages, settings, think if think is not None else settings.think, show_thinking
+            client, chat_model, context.messages, settings, think if think is not None else settings.think, show_thinking
         )
     except OllamaError as exc:
         fail(str(exc))
     if sources:
-        _print_sources(used)
+        _print_sources(context.hits)
     _print_speed(stats)
 
 

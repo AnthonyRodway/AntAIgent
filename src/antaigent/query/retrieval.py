@@ -25,11 +25,14 @@ class Hit:
     keyword_rank: int | None
 
 
-def search(store: Store, embedder: QueryEmbedder, query: str, k: int = 12, pool: int = 60) -> list[Hit]:
+def search(
+    store: Store, embedder: QueryEmbedder, query: str, k: int = 12, pool: int = 60, vector: np.ndarray | None = None
+) -> list[Hit]:
+    """`vector` is the query's embedding, if the caller already has it."""
     ids, matrix = store.vectors()
     vector_ranked: list[int] = []
     if len(ids):
-        sims = matrix @ embedder.embed_query(query)
+        sims = matrix @ (vector if vector is not None else embedder.embed_query(query))
         n = min(pool, len(ids))
         top = np.argpartition(-sims, n - 1)[:n]
         top = top[np.argsort(-sims[top])]
