@@ -17,6 +17,9 @@ DEFAULT_IGNORES = [
     ".mypy_cache/", ".pytest_cache/", ".ruff_cache/", ".ipynb_checkpoints/",
     ".idea/", ".vscode/", "dist/", "build/", "target/", ".next/", ".cache/",
     "*.lock", "package-lock.json", "pnpm-lock.yaml", "*.min.js", "*.min.css", "*.map",
+    "Thumbs.db", "desktop.ini", ".DS_Store",
+    # Office writes these lock files next to documents that are open.
+    "~$*",
     # Esri file geodatabases are folders of binary tables.
     "*.gdb/",
 ]
@@ -28,10 +31,10 @@ SKIP_EXTENSIONS = frozenset(
     .exe .dll .so .dylib .o .a .lib .obj .pdb .class .pyc .pyo .pyd .bin
     .mp3 .mp4 .wav .avi .mov .mkv .flac .ogg .m4a
     .ttf .otf .woff .woff2 .eot
-    .pdf .doc .docx .xls .xlsx .xlsm .ppt .pptx .odt .ods
-    .parquet .feather .arrow .pkl .pickle .npy .npz .h5 .hdf5 .nc .mat .sav .rds .rdata
-    .db .sqlite .sqlite3 .mdb .accdb
-    .shp .shx .dbf .sbn .sbx .cpg .gpkg .img .ecw .sid .las .laz
+    .pdf .doc .docx .xls .ppt .pptx .odt .ods
+    .feather .arrow .pkl .pickle .npy .npz .h5 .hdf5 .nc .mat .sav .rds .rdata
+    .mdb .accdb
+    .shp .shx .dbf .sbn .sbx .cpg .img .ecw .sid .las .laz
     .gdbtable .gdbtablx .gdbindexes .atx .spx .freelist .horizon .mxd .aprx .lyr .sde .esriaddinx
     """.split()
 )

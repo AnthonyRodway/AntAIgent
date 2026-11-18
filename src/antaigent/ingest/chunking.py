@@ -1,8 +1,9 @@
 """Split files into retrievable chunks that keep their line numbers.
 
 Code is split along syntax-tree boundaries (functions, classes, methods) using
-tree-sitter, Markdown along headings, notebooks by cell, CSV/TSV into a single
-preview, and everything else into overlapping line windows.
+tree-sitter, Markdown along headings, notebooks by cell, and everything else into
+overlapping line windows. Data files are normally profiled instead (profiling.py);
+the CSV/TSV preview here is the fallback when that fails.
 """
 
 from __future__ import annotations
