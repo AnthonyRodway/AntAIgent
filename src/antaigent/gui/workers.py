@@ -61,10 +61,16 @@ class Task(QThread):
 
 
 def _client(settings: Settings, *models: str) -> Ollama:
+    """A client for Ollama, after checking it has `models`. Use it in a `with` block."""
     client = Ollama(settings.ollama_url)
-    available = client.models()
+    try:
+        available = client.models()
+    except Exception:
+        client.close()
+        raise
     missing = [m for m in dict.fromkeys(models) if not has_model(available, m)]
     if missing:
+        client.close()
         raise RuntimeError(
             f"Ollama doesn't have {', '.join(missing)} yet. Download with: "
             + "; ".join(f"ollama pull {m}" for m in missing)
@@ -78,16 +84,14 @@ def _embedder(settings: Settings, client: Ollama) -> Embedder:
 
 def learn_job(settings: Settings, root: Path, full: bool = False):
     def run(task: Task):
-        embedder = _embedder(settings, _client(settings, settings.embed_model))
-
         def progress(done: int, total: int, current: str) -> None:
             if task.stopping:
                 raise Cancelled
             task.progress.emit(done, total, current)
 
-        with Store(index_path(settings.home, root)) as store:
+        with _client(settings, settings.embed_model) as client, Store(index_path(settings.home, root)) as store:
             report = learn(
-                root, store, embedder,
+                root, store, _embedder(settings, client),
                 max_file_bytes=settings.max_file_bytes, chunk_chars=settings.chunk_chars,
                 full=full, progress=progress,
             )
@@ -99,56 +103,54 @@ def learn_job(settings: Settings, root: Path, full: bool = False):
 
 def summarize_job(settings: Settings, root: Path):
     def run(task: Task):
-        client = _client(settings, settings.embed_model, settings.summarizer)
-        embedder = _embedder(settings, client)
+        with _client(settings, settings.embed_model, settings.summarizer) as client:
 
-        def complete(messages: list[dict[str, str]]) -> str:
-            return client.complete(
-                settings.summarizer, messages,
-                think=settings.think, num_ctx=settings.num_ctx, keep_alive=settings.keep_alive,
-            )[0]
+            def complete(messages: list[dict[str, str]]) -> str:
+                return client.complete(
+                    settings.summarizer, messages,
+                    think=settings.think, num_ctx=settings.num_ctx, keep_alive=settings.keep_alive,
+                )[0]
 
-        with Store(index_path(settings.home, root)) as store:
-            return summarize(
-                root.name, store, embedder, complete,
-                model=settings.summarizer,
-                progress=lambda done, total, current: task.progress.emit(done, total, current),
-                should_stop=lambda: task.stopping,
-            )
+            with Store(index_path(settings.home, root)) as store:
+                return summarize(
+                    root.name, store, _embedder(settings, client), complete,
+                    model=settings.summarizer,
+                    progress=lambda done, total, current: task.progress.emit(done, total, current),
+                    should_stop=lambda: task.stopping,
+                )
 
     return run
 
 
 def ask_job(settings: Settings, root: Path, question: str, history: Sequence[tuple[str, str]], think: str):
     def run(task: Task):
-        client = _client(settings, settings.embed_model, settings.chat_model)
-        with Store(index_path(settings.home, root)) as store:
-            context = gather(
-                store, _embedder(settings, client), question,
-                project=root.name, k=settings.top_k, context_chars=settings.context_chars, history=history,
+        with _client(settings, settings.embed_model, settings.chat_model) as client:
+            with Store(index_path(settings.home, root)) as store:
+                context = gather(
+                    store, _embedder(settings, client), question,
+                    project=root.name, k=settings.top_k, context_chars=settings.context_chars, history=history,
+                )
+            task.event.emit("context", context)
+            if not context.hits:
+                raise RuntimeError("The index is empty, so there's nothing to answer from.")
+            stream = client.chat(
+                settings.chat_model, context.messages,
+                think=think, num_ctx=settings.num_ctx, keep_alive=settings.keep_alive,
             )
-        task.event.emit("context", context)
-        if not context.hits:
-            raise RuntimeError("The index is empty, so there's nothing to answer from.")
-        stream = client.chat(
-            settings.chat_model, context.messages,
-            think=think, num_ctx=settings.num_ctx, keep_alive=settings.keep_alive,
-        )
-        try:
-            for kind, payload in stream:
-                if task.stopping:
-                    break
-                task.event.emit(kind, payload)
-        finally:
-            stream.close()  # closing the HTTP stream makes Ollama stop generating
+            try:
+                for kind, payload in stream:
+                    if task.stopping:
+                        break
+                    task.event.emit(kind, payload)
+            finally:
+                stream.close()  # closing the HTTP stream makes Ollama stop generating
 
     return run
 
 
 def search_job(settings: Settings, root: Path, query: str, k: int):
     def run(task: Task):
-        client = _client(settings, settings.embed_model)
-        with Store(index_path(settings.home, root)) as store:
+        with _client(settings, settings.embed_model) as client, Store(index_path(settings.home, root)) as store:
             return search(store, _embedder(settings, client), query, k)
 
     return run
@@ -156,8 +158,8 @@ def search_job(settings: Settings, root: Path, query: str, k: int):
 
 def status_job(settings: Settings):
     def run(task: Task):
-        client = Ollama(settings.ollama_url, timeout=10)
-        return {"version": client.version(), "models": client.models(), "running": client.running()}
+        with Ollama(settings.ollama_url, timeout=10) as client:
+            return {"version": client.version(), "models": client.models(), "running": client.running()}
 
     return run
 

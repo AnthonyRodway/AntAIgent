@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -35,13 +37,33 @@ def has_model(available: list[str], name: str) -> bool:
     return name in available or (":" not in name and f"{name}:latest" in available)
 
 
+def is_loopback(url: str) -> bool:
+    host = urlparse(url).hostname or ""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 class Ollama:
     def __init__(self, base_url: str, timeout: float = 600.0):
         self.base_url = base_url.rstrip("/")
-        self._http = httpx.Client(base_url=self.base_url, timeout=httpx.Timeout(timeout, connect=5.0))
+        # httpx otherwise honours HTTP(S)_PROXY and, on Windows, the system proxy, even for
+        # 127.0.0.1: prompts full of project code would go to the proxy instead of staying local.
+        self._http = httpx.Client(
+            base_url=self.base_url, timeout=httpx.Timeout(timeout, connect=5.0), trust_env=not is_loopback(self.base_url)
+        )
 
     def close(self) -> None:
         self._http.close()
+
+    def __enter__(self) -> Ollama:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     def _unreachable(self) -> OllamaError:
         return OllamaError(f"Can't reach Ollama at {self.base_url}. Is it running?")

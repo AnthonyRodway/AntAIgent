@@ -3,10 +3,11 @@
 import importlib.util
 
 import typer
+from rich.markup import escape
 
 from ..config import Settings
 from ..ingest.chunking import CODE_LANGUAGES
-from ..llm.ollama import Ollama, OllamaError, has_model
+from ..llm.ollama import Ollama, OllamaError, has_model, is_loopback
 from ._common import console, installed_grammars
 
 
@@ -20,8 +21,13 @@ def doctor() -> None:
         available = client.models()
         running = client.running()
     except OllamaError as exc:
-        console.print(f"[red]FAIL[/] {exc}")
-        raise typer.Exit(1)
+        console.print(f"[red]FAIL[/] {escape(str(exc))}")
+        raise typer.Exit(1) from None
+    if not is_loopback(settings.ollama_url):
+        console.print(
+            f"[yellow]WARN[/] Ollama is on another machine ({escape(settings.ollama_url)}): "
+            "your files and questions are sent there."
+        )
 
     for role, name in (("chat model", settings.chat_model), ("embedding model", settings.embed_model)):
         if has_model(available, name):
