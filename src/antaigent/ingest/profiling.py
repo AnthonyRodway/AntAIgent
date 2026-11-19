@@ -13,6 +13,7 @@ import datetime as dt
 import os
 import sqlite3
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
@@ -31,6 +32,9 @@ CATEGORICAL_MAX = 25
 TOP_VALUES = 5
 SAMPLE_ROWS = 5
 MAX_CELL = 40
+# A database could hold a view that never finishes (a recursive CTE, say), so each
+# table or view gets this long before it's reported as unreadable.
+SQLITE_SECONDS_PER_TABLE = 15
 
 _FORMAT_NAMES = {".csv": "CSV", ".tsv": "TSV", ".parquet": "Parquet", ".xlsx": "Excel", ".xlsm": "Excel",
                  ".sqlite": "SQLite", ".sqlite3": "SQLite", ".db": "SQLite", ".gpkg": "GeoPackage"}
@@ -72,7 +76,12 @@ def _duckdb():
         import duckdb
     except ImportError as exc:
         raise ProfileError("DuckDB isn't installed") from exc
-    return duckdb.connect(config={"autoinstall_known_extensions": False})
+    return duckdb.connect(config={
+        "autoinstall_known_extensions": False,
+        "autoload_known_extensions": False,
+        # Spill to the system temp folder; DuckDB's default is ./.tmp, which could be the project.
+        "temp_directory": os.path.join(tempfile.gettempdir(), "antai-duckdb"),
+    })
 
 
 def _csv_source(con, path: Path) -> str:
@@ -206,10 +215,15 @@ def _sqlite_tables(path: Path) -> list[Table]:
     uri = "file:" + quote(path.as_posix(), safe="/:") + "?mode=ro"
     try:
         conn = sqlite3.connect(uri, uri=True)
+        # The file may come from anywhere: don't let its views and triggers call functions.
+        conn.execute("PRAGMA trusted_schema = OFF")
     except sqlite3.Error as exc:
         raise ProfileError(f"SQLite couldn't open it: {exc}") from exc
+    deadline = [0.0]
+    conn.set_progress_handler(lambda: time.monotonic() > deadline[0], 10_000)  # non-zero aborts the query
     tables: list[Table] = []
     try:
+        deadline[0] = time.monotonic() + SQLITE_SECONDS_PER_TABLE
         objects = conn.execute(
             "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY type, name"
         ).fetchall()
@@ -217,12 +231,15 @@ def _sqlite_tables(path: Path) -> list[Table]:
             if name.lower().startswith(_GPKG_INTERNAL):
                 continue
             quoted = '"' + name.replace('"', '""') + '"'
+            deadline[0] = time.monotonic() + SQLITE_SECONDS_PER_TABLE
             try:
                 info = conn.execute(f"PRAGMA table_info({quoted})").fetchall()
                 count = conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
                 sample = conn.execute(f"SELECT * FROM {quoted} LIMIT 3").fetchall()
             except sqlite3.Error as exc:
-                tables.append(Table(name, None, [], note=f"couldn't read: {exc}"))
+                timed_out = "interrupted" in str(exc)
+                reason = f"took over {SQLITE_SECONDS_PER_TABLE}s to read" if timed_out else f"couldn't read: {exc}"
+                tables.append(Table(name, None, [], note=reason))
                 continue
             columns = [Column(r[1], r[2] or "") for r in info]
             tables.append(Table(name, count, columns, [c.name for c in columns], sample, note="view" if kind == "view" else ""))

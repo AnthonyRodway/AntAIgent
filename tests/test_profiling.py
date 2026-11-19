@@ -72,6 +72,23 @@ def test_geopackage_schema_skips_internal_tables(tmp_path):
     assert "1 | <binary> | north" in chunk.text
 
 
+def test_a_view_that_never_finishes_is_given_up_on(tmp_path, monkeypatch):
+    monkeypatch.setattr("antaigent.ingest.profiling.SQLITE_SECONDS_PER_TABLE", 0.5)
+    path = tmp_path / "trap.sqlite"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE sites (name TEXT)")
+    conn.execute("INSERT INTO sites VALUES ('north')")
+    conn.execute(
+        "CREATE VIEW forever AS WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n) SELECT x FROM n"
+    )
+    conn.commit()
+    conn.close()
+    chunks = profile_chunks("trap.sqlite", path, 4000)
+    text = "\n".join(c.text for c in chunks)
+    assert "table 'sites'), 1 rows" in text
+    assert "table 'forever'), unknown rows" in text and "took over 0.5s to read" in text
+
+
 def test_non_sqlite_db_is_rejected(tmp_path):
     (tmp_path / "Thumbs.db").write_bytes(b"\xd0\xcf\x11\xe0 not sqlite")
     with pytest.raises(ProfileError):
