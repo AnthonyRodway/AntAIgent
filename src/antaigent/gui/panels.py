@@ -483,12 +483,14 @@ class FilePanel(QWidget):
         self.main = main
         self.path: str | None = None
         self.title = QLabel("Pick a file in the sidebar, or click a citation.")
+        self.title.setTextFormat(Qt.TextFormat.PlainText)  # file names aren't markup
         self.title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         font = self.title.font()
         font.setBold(True)
         font.setPointSize(font.pointSize() + 1)
         self.title.setFont(font)
         self.subtitle = QLabel("")
+        self.subtitle.setTextFormat(Qt.TextFormat.PlainText)
         self.subtitle.setEnabled(False)
         self.code = CodeView()
         self.info = Browser()
@@ -512,19 +514,25 @@ class FilePanel(QWidget):
         self.code.set_code("")
         self.info.setHtml("")
 
-    def open(self, path: str, start: int | None = None, end: int | None = None) -> None:
+    def open(self, path: str, start: int | None = None, end: int | None = None) -> bool:
+        """Show an indexed file; returns False if `path` isn't one."""
         store, root = self.main.store, self.main.root
         if store is None or root is None:
-            return
+            return False
         mark = (start, end or start) if start else None
         if path == self.path:
             self.code.mark_lines(mark)
-            return
+            return True
         record = store.file(path)
+        if record is None:
+            # Links can come from model output, so only files the index knows are opened:
+            # never "../" or absolute paths that lead elsewhere on the machine.
+            self.main.statusBar().showMessage(f"{path} isn't a file in this project's index.", 6000)
+            return False
         chunks = store.chunks_for_file(path)
         kind = chunks[0].kind if chunks else ""
         notes = []
-        if record is not None and record.status != "indexed":
+        if record.status != "indexed":
             notes.append(record.status)
         if kind in ("data", "notebook"):
             text = file_text(chunks)
@@ -535,17 +543,17 @@ class FilePanel(QWidget):
             if note:
                 notes.append(note)
             self.code.set_code(text, path, mark=mark)
-        if record is not None:
-            notes.insert(0, f"{record.size / 1000:,.1f} KB, {record.n_chunks} chunks")
-            try:
-                if (root / path).stat().st_mtime != record.mtime:
-                    notes.append("changed since it was learned")
-            except OSError:
-                notes.append("no longer on disk")
+        notes.insert(0, f"{record.size / 1000:,.1f} KB, {record.n_chunks} chunks")
+        try:
+            if (root / path).stat().st_mtime != record.mtime:
+                notes.append("changed since it was learned")
+        except OSError:
+            notes.append("no longer on disk")
         self.path = path
         self.title.setText(path)
         self.subtitle.setText(" | ".join(notes))
         self.info.setHtml(_page(self.main.theme, self._info(path)))
+        return True
 
     @staticmethod
     def _read(full_path, chunks) -> tuple[str, str]:

@@ -60,6 +60,14 @@ def test_window_opens_a_project_and_navigates(tmp_path, embedder, qapp):
         assert "def run()" in window.file.code.toPlainText()
         assert "pkg/util.py" in window.file.info.toPlainText()  # its import, resolved
 
+        # Links can come from the model; anything outside the index is refused.
+        (tmp_path / "secret.txt").write_text("password")
+        for bad in ("../secret.txt", str(tmp_path / "secret.txt"), "pkg/missing.py"):
+            window.follow_link(file_link(bad, 1, 2))
+            assert window.file.path == "pkg/main.py" and "password" not in window.file.code.toPlainText()
+        window.follow_link("antai:file?p=pkg/util.py&s=1x&e=")  # bad line numbers are ignored
+        assert window.file.path == "pkg/util.py"
+
         window.open_symbol("helper")
         assert window.tabs.currentWidget() is window.symbol
         window.overview.refresh()

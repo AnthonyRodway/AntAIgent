@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, QTimer
@@ -30,7 +31,14 @@ from ..index.summarize import SummaryReport
 from ..llm.ollama import has_model
 from ..projects import Registry, index_path
 from . import style
-from .panels import AskPanel, FilePanel, OverviewPanel, SearchPanel, Sidebar, SymbolPanel
+from .panels import (
+    AskPanel,
+    FilePanel,
+    OverviewPanel,
+    SearchPanel,
+    Sidebar,
+    SymbolPanel,
+)
 from .render import parse_link
 from .style import GLYPH_ADD, GLYPH_DOCUMENT, GLYPH_FOLDER, GLYPH_REFRESH, GLYPH_WATCH
 from .widgets import current_theme, glyph_icon
@@ -119,6 +127,7 @@ class MainWindow(QMainWindow):
         self.progress.setMaximumWidth(200)
         self.progress.setTextVisible(False)
         self.job_label = QLabel("")
+        self.job_label.setTextFormat(Qt.TextFormat.PlainText)  # shows file paths
         self.job_label.setMaximumWidth(380)
         self.cancel = QPushButton("Cancel")
         self.cancel.clicked.connect(self.cancel_job)
@@ -211,15 +220,17 @@ class MainWindow(QMainWindow):
     def follow_link(self, url: str) -> None:
         kind, params = parse_link(url)
         if kind == "file" and "p" in params:
-            start = int(params["s"]) if "s" in params else None
-            end = int(params["e"]) if "e" in params else None
-            self.open_file(params["p"], start, end)
+            start, end = params.get("s", ""), params.get("e", "")
+            # Links in answers come from the model, so the line numbers may not be numbers.
+            self.open_file(
+                params["p"], int(start) if start.isdigit() else None, int(end) if end.isdigit() else None
+            )
         elif kind == "symbol" and "n" in params:
             self.open_symbol(params["n"])
 
     def open_file(self, path: str, start: int | None = None, end: int | None = None) -> None:
-        self.file.open(path, start, end)
-        self.tabs.setCurrentWidget(self.file)
+        if self.file.open(path, start, end):
+            self.tabs.setCurrentWidget(self.file)
 
     def open_symbol(self, name: str) -> None:
         self.symbol.show_symbol(name)
@@ -377,7 +388,9 @@ class MainWindow(QMainWindow):
             return
         task = Task(status_job(self.settings), self)
         task.succeeded.connect(self._show_ollama)
-        task.failed.connect(lambda msg: self.ollama_label.setText(f"<span style='color:#d1242f'>Ollama: {msg}</span>"))
+        task.failed.connect(
+            lambda msg: self.ollama_label.setText(f"<span style='color:#d1242f'>Ollama: {html.escape(msg)}</span>")
+        )
         task.finished.connect(lambda: setattr(self, "_status_task", None))
         self._status_task = task
         task.start()
@@ -385,7 +398,7 @@ class MainWindow(QMainWindow):
     def _show_ollama(self, info: dict) -> None:
         missing = [m for m in (self.settings.chat_model, self.settings.embed_model) if not has_model(info["models"], m)]
         if missing:
-            self.ollama_label.setText(f"<span style='color:#d1242f'>Missing models: {', '.join(missing)}</span>")
+            self.ollama_label.setText(f"<span style='color:#d1242f'>Missing models: {html.escape(', '.join(missing))}</span>")
             self.ollama_label.setToolTip("Download with: " + "; ".join(f"ollama pull {m}" for m in missing))
             return
         chat = next((m for m in info["running"] if m.get("name") == self.settings.chat_model), None)
@@ -405,7 +418,9 @@ class MainWindow(QMainWindow):
         return glyph_icon(glyph, color or self.theme.text, self.theme.muted, gap=gap)
 
     def show_error(self, title: str, message: str) -> None:
-        QMessageBox.warning(self, title, message)
+        box = QMessageBox(QMessageBox.Icon.Warning, title, message, QMessageBox.StandardButton.Ok, self)
+        box.setTextFormat(Qt.TextFormat.PlainText)  # error text can include file names and paths
+        box.exec()
 
     def _restore_layout(self) -> None:
         settings = QSettings("AntAIgent", "AntAIgent")
