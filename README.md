@@ -89,8 +89,15 @@ only files that changed since their summary, and the folders above them, are red
 (`.git`, `node_modules`, virtual environments, build output, lock files, binaries, images,
 Office documents, file geodatabases). HTML pages produced by API documentation generators
 (pdoc, Sphinx, Doxygen, Javadoc, TypeDoc and others) are skipped too, because they repeat the
-source code that is already indexed. For anything else, add a `.antaiignore` file with
-gitignore syntax, for example:
+source code that is already indexed.
+
+Common secret files are never learned, because the index keeps a copy of everything it reads
+and answers can quote it: `.env` and `.env.*` (but not `.env.example`, `.env.sample` or
+`.env.template`), private keys and certificates (`*.pem`, `*.key`, `*.p12`, `*.pfx`,
+`id_rsa` and friends), and `.netrc`, `.pypirc` and `.npmrc`. Symlinks and junctions that
+point outside the folder are not followed, so learning never reads files from elsewhere.
+
+For anything else, add a `.antaiignore` file with gitignore syntax, for example:
 
 ```
 archive/
@@ -123,7 +130,7 @@ Every setting can be overridden with an environment variable:
 | `ANTAI_CHUNK_CHARS` | `2400` | Target chunk size (changing it rebuilds the index) |
 | `ANTAI_MAX_FILE_BYTES` | `1000000` | Larger files are skipped (CSV/TSV are previewed instead) |
 | `ANTAI_HOME` | `~/.antai` | Where indexes are stored |
-| `ANTAI_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama server |
+| `ANTAI_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama server. Proxy settings are ignored for a local address, so requests can't detour through a proxy. Pointing this at another machine sends your files and questions there; `antai doctor` warns when it does. |
 
 ## How it works
 
