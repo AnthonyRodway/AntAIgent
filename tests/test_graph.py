@@ -32,7 +32,7 @@ def format_rows(rows):
 
 @pytest.mark.skipif(not python_grammar_installed(), reason="python tree-sitter grammar not downloaded")
 def test_python_definitions_references_and_callers():
-    graph = GraphExtractor(Chunker()._parser).extract("pkg/report.py", PYTHON)
+    graph = GraphExtractor(Chunker().parser).extract("pkg/report.py", PYTHON)
     defs = {d.qualname: d for d in graph.definitions}
     assert defs["Report"].kind == "class"
     assert defs["Report.build"].kind == "method"

@@ -146,7 +146,7 @@ def learn(
             todo.append(f)
 
     chunker = Chunker(chunk_chars)
-    extractor = GraphExtractor(chunker._parser)
+    extractor = GraphExtractor(chunker.parser)
     pending: list[tuple[FileRecord, list[Chunk], FileGraph | None, bool]] = []
     pending_chunks = 0
 

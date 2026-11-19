@@ -183,10 +183,14 @@ def _definitions_by_walking(tree) -> list[Definition]:
 
 # --- Imports -------------------------------------------------------------------------
 
+# These run over whole files from folders you may not control, so none of them may
+# backtrack badly: no overlapping repeats. A JS import only spans lines inside { ... }.
 _M = re.MULTILINE
 _PY_IMPORT = re.compile(r"^[ \t]*import[ \t]+([\w.][\w. \t,]*)", _M)
-_PY_FROM = re.compile(r"^[ \t]*from[ \t]+(\.+[\w.]*|[\w.]+)[ \t]+import[ \t]+(\([^)]*\)|[^\n#;]*)", _M)
-_JS_FROM = re.compile(r"""^[ \t]*(?:import|export)\b[^'";]*?\bfrom[ \t]*['"]([^'"\n]+)['"]""", _M)
+_PY_FROM = re.compile(r"^[ \t]*from[ \t]+(\.[\w.]*|[\w.]+)[ \t]+import[ \t]+(\([^)]*\)|[^\n#;]*)", _M)
+_JS_FROM = re.compile(
+    r"""^[ \t]*(?:import|export)\b(?:[^'";{}\n]|\{[^{}]{0,2000}\})*?\bfrom[ \t]*['"]([^'"\n]+)['"]""", _M
+)
 _JS_BARE = re.compile(r"""^[ \t]*import[ \t]*['"]([^'"\n]+)['"]""", _M)
 _JS_CALL = re.compile(r"""\b(?:require|import)\s*\(\s*['"]([^'"\n]+)['"]\s*\)""")
 _C_INCLUDE = re.compile(r"""^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]""", _M)

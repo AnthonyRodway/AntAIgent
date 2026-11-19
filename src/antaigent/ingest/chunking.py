@@ -158,7 +158,9 @@ def _collect_units(node, max_bytes: int, prefix: str, out: list[_Unit]) -> None:
             out.append(_Unit(child.start_point[0], _end_row(child), qualified))
 
 
-_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+# Closing #s and spaces are trimmed in Python: doing it in the pattern, as
+# (.*?)\s*#*\s*$, backtracks so badly that one long line can stall learning for hours.
+_HEADING = re.compile(r"^(#{1,6})[ \t]+(.*)$")
 
 
 def _markdown(lines: list[str], max_chars: int) -> list[Chunk]:
@@ -177,7 +179,7 @@ def _markdown(lines: list[str], max_chars: int) -> list[Chunk]:
             level = len(match.group(1))
             while stack and stack[-1][0] >= level:
                 stack.pop()
-            stack.append((level, match.group(2)))
+            stack.append((level, match.group(2).rstrip().rstrip("#").rstrip()))
             start, crumb = i, " > ".join(title for _, title in stack)
     sections.append(_Unit(start, len(lines) - 1, crumb))
     return _merge_units(sections, lines, max_chars, "doc")
@@ -244,7 +246,8 @@ class Chunker:
         self._parsers: dict[str, object] = {}
         self._installed: set[str] | None = None
 
-    def _parser(self, language: str):
+    def parser(self, language: str):
+        """The tree-sitter parser for `language`, or None if its grammar isn't installed."""
         if language not in self._parsers:
             parser = None
             try:
@@ -284,7 +287,7 @@ class Chunker:
         return [c for c in chunks if c.text.strip()]
 
     def _code(self, language: str, text: str, lines: list[str]) -> list[Chunk]:
-        parser = self._parser(language)
+        parser = self.parser(language)
         if parser is None:
             self.missing_grammars.add(language)
             return line_windows(lines, 0, len(lines) - 1, self.max_chars, "code")
