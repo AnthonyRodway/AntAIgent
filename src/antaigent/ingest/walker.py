@@ -22,6 +22,10 @@ DEFAULT_IGNORES = [
     "~$*",
     # Esri file geodatabases are folders of binary tables.
     "*.gdb/",
+    # Secrets: the index keeps a copy of everything it reads, and answers can quote it.
+    ".env", ".env.*", "!.env.example", "!.env.sample", "!.env.template",
+    "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+    ".netrc", ".pypirc", ".npmrc",
 ]
 
 SKIP_EXTENSIONS = frozenset(
@@ -59,8 +63,24 @@ def _load_spec(directory: Path, name: str) -> pathspec.PathSpec | None:
     return pathspec.GitIgnoreSpec.from_lines(lines)
 
 
+def _is_link(path: Path) -> bool:
+    isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
+    return path.is_symlink() or bool(isjunction and isjunction(path))
+
+
+def _leaves(path: Path, root: Path) -> bool:
+    """Whether a symlink or junction points outside the project."""
+    try:
+        return not path.resolve().is_relative_to(root)
+    except OSError:
+        return True
+
+
 def walk(root: Path) -> Iterator[SourceFile]:
-    """Yield candidate files, honouring .gitignore and .antaiignore files at any depth."""
+    """Yield candidate files, honouring .gitignore and .antaiignore files at any depth.
+
+    Links that lead outside the folder are skipped, so learning a folder never reads
+    files from elsewhere on the machine."""
     root = root.resolve()
     defaults = pathspec.GitIgnoreSpec.from_lines(DEFAULT_IGNORES)
     specs: list[tuple[str, pathspec.PathSpec]] = []
@@ -81,7 +101,10 @@ def walk(root: Path) -> Iterator[SourceFile]:
                 return True
             return any(spec.match_file(probe[len(base):]) for base, spec in active)
 
-        dirnames[:] = sorted(d for d in dirnames if not ignored(rel_dir + d, True))
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if not ignored(rel_dir + d, True) and not (_is_link(directory / d) and _leaves(directory / d, root))
+        )
         for name in sorted(filenames):
             rel = rel_dir + name
             if Path(name).suffix.lower() in SKIP_EXTENSIONS or ignored(rel, False):
@@ -90,6 +113,8 @@ def walk(root: Path) -> Iterator[SourceFile]:
             try:
                 st = path.stat()
             except OSError:
+                continue
+            if path.is_symlink() and _leaves(path, root):
                 continue
             if stat.S_ISREG(st.st_mode):
                 yield SourceFile(path, rel, st.st_size, st.st_mtime)

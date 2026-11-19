@@ -1,3 +1,7 @@
+import os
+
+import pytest
+
 from antaigent.ingest.walker import walk
 
 
@@ -30,6 +34,29 @@ def test_walk_honours_ignore_rules(tmp_path):
     for excluded in ("secret.txt", "logs/run.log", "node_modules/lib/index.js", ".git/config",
                      "image.png", "sub/local.cfg", "drafts/notes.md"):
         assert excluded not in rels
+
+
+def test_walk_skips_secrets_but_keeps_env_examples(tmp_path):
+    for name in (".env", ".env.local", "config/.env.production", "certs/server.key", "certs/server.pem",
+                 "home/.ssh/id_rsa", ".npmrc", ".env.example", "app.py"):
+        write(tmp_path / name)
+    rels = {f.rel for f in walk(tmp_path)}
+    assert rels == {".env.example", "app.py"}
+
+
+def test_walk_does_not_follow_links_out_of_the_project(tmp_path):
+    project, outside = tmp_path / "project", tmp_path / "outside"
+    write(project / "app.py")
+    write(project / "lib" / "util.py")
+    write(outside / "credentials.txt", "secret")
+    try:
+        os.symlink(outside / "credentials.txt", project / "notes.txt")
+        os.symlink(outside, project / "linked", target_is_directory=True)
+        os.symlink(project / "lib" / "util.py", project / "alias.py")  # stays inside: kept
+    except OSError:
+        pytest.skip("creating symlinks needs Developer Mode or admin rights on Windows")
+    rels = {f.rel for f in walk(project)}
+    assert rels == {"app.py", "lib/util.py", "alias.py"}
 
 
 def test_walk_reports_size_and_forward_slash_paths(tmp_path):
