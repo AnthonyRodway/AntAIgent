@@ -140,8 +140,8 @@ class ChatStore:
             (conversation_id,),
         )
         out = []
-        for question, answer, thinking, sources, notes, stats, error, stopped in rows:
-            notes = json.loads(notes)
+        for question, answer, thinking, sources, notes_json, stats, error, stopped in rows:
+            notes = json.loads(notes_json)
             out.append(SavedTurn(
                 question, answer, thinking,
                 [(p, int(s), int(e)) for p, s, e in json.loads(sources)],
