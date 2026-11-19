@@ -2,6 +2,7 @@
 
 import datetime as dt
 
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -45,4 +46,4 @@ def status(path: ProjectOption = None) -> None:
     if skipped:
         console.print("\n[bold]Skipped files[/] (first 10)")
         for file_path, reason in skipped:
-            console.print(f"  {file_path}  [dim]{reason}[/]", highlight=False)
+            console.print(f"  {escape(file_path)}  [dim]{escape(reason)}[/]", highlight=False)

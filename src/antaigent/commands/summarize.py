@@ -4,7 +4,15 @@ from typing import Annotated
 
 import typer
 from rich.markdown import Markdown
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.markup import escape
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from ..config import Settings
 from ..index.summarize import SummaryReport
@@ -38,7 +46,7 @@ def summarize(
     require_models(client, settings.embed_model, settings.summarizer)
     root, store = open_project(settings, path)
     embedder = Embedder(client, settings.embed_model, settings.keep_alive, settings.embed_batch)
-    console.print(f"Summarizing [bold]{root}[/] with {settings.summarizer}", highlight=False)
+    console.print(f"Summarizing [bold]{escape(str(root))}[/] with {escape(settings.summarizer)}", highlight=False)
     progress = Progress(
         SpinnerColumn(), TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn(),
         TextColumn("{task.fields[current]}", style="dim", markup=False),
@@ -76,4 +84,4 @@ def _print_report(report: SummaryReport) -> None:
     if report.stopped and report.errors:
         console.print("[yellow]Stopped after repeated errors.[/]")
     for error in report.errors[:5]:
-        console.print(f"  [yellow]{error}[/]", highlight=False)
+        console.print(f"  [yellow]{escape(error)}[/]", highlight=False)

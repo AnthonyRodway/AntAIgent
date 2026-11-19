@@ -5,6 +5,7 @@ from typing import Annotated, NoReturn, Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from ..config import Settings
 from ..index.store import Store
@@ -24,7 +25,8 @@ ProjectOption = Annotated[
 
 
 def fail(message: str) -> NoReturn:
-    err_console.print(f"[bold red]Error:[/] {message}", highlight=False)
+    # Messages carry paths and error text; "[...]" in them must print as-is, not as markup.
+    err_console.print(f"[bold red]Error:[/] {escape(message)}", highlight=False)
     raise typer.Exit(1)
 
 

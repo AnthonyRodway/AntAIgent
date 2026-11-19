@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
+from rich.markup import escape
 
 from ..config import Settings
 from ..index.indexer import LearnReport
@@ -55,7 +56,7 @@ def watch(
                 if report.changed:
                     console.print(f"[dim]{stamp}[/]  {_changes(report)} [dim]({report.seconds:.1f}s)[/]", highlight=False)
                 for error in report.errors[:3]:
-                    console.print(f"[dim]{stamp}[/]  [yellow]{error}[/]", highlight=False)
+                    console.print(f"[dim]{stamp}[/]  [yellow]{escape(error)}[/]", highlight=False)
                 if complete is not None and report.changed:
                     summary = summarize_project(root.name, store, embedder, complete, model=settings.summarizer)
                     if summary.files or summary.dirs or summary.project:
@@ -65,9 +66,9 @@ def watch(
                             highlight=False,
                         )
         except OllamaError as exc:
-            console.print(f"[dim]{stamp}[/]  [red]{exc}[/]", highlight=False)
+            console.print(f"[dim]{stamp}[/]  [red]{escape(str(exc))}[/]", highlight=False)
 
-    console.print(f"Watching [bold]{root}[/]. Press Ctrl+C to stop.", highlight=False)
+    console.print(f"Watching [bold]{escape(str(root))}[/]. Press Ctrl+C to stop.", highlight=False)
     update()
     try:
         watch_folder(root, lambda _paths: update(), poll=poll)

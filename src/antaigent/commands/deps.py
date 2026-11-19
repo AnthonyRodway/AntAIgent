@@ -3,6 +3,7 @@
 from typing import Annotated
 
 import typer
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -27,12 +28,12 @@ def deps(
         defs = [d for d in store.definitions_in(target) if "." not in d.qualname]
 
     if len(matches) > 1 and not target.endswith("/" + file.replace("\\", "/").strip("/")):
-        others = ", ".join(matches[1:5])
-        console.print(f"[yellow]Several files match; showing {target}.[/] [dim]Others: {others}[/]", highlight=False)
-    console.print(f"[bold]{target}[/]", highlight=False)
+        others = escape(", ".join(matches[1:5]))
+        console.print(f"[yellow]Several files match; showing {escape(target)}.[/] [dim]Others: {others}[/]", highlight=False)
+    console.print(f"[bold]{escape(target)}[/]", highlight=False)
     if defs:
         names = ", ".join(d.qualname for d in defs[:30]) + (" ..." if len(defs) > 30 else "")
-        console.print(f"[dim]Defines: {names}[/]", highlight=False)
+        console.print(f"[dim]Defines: {escape(names)}[/]", highlight=False)
     console.print()
 
     if imports:
@@ -57,4 +58,4 @@ def deps(
         console.print(table)
     else:
         console.print("[bold]Imported by:[/] no project file [dim](it may be an entry point or script)[/]")
-    console.print(f"\n[dim]{root}[/]", highlight=False)
+    console.print(f"\n[dim]{escape(str(root))}[/]", highlight=False)

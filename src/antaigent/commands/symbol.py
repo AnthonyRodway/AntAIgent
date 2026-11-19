@@ -3,6 +3,7 @@
 from typing import Annotated
 
 import typer
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -65,4 +66,4 @@ def symbol(
         for callee, where in callees:
             table.add_row(Text(callee), Text(", ".join(w.location for w in where) or "outside the project"))
         console.print(table)
-    console.print(f"\n[dim]{root}. Found by static analysis, so dynamic calls are missed.[/]", highlight=False)
+    console.print(f"\n[dim]{escape(str(root))}. Found by static analysis, so dynamic calls are missed.[/]", highlight=False)

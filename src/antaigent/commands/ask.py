@@ -5,6 +5,7 @@ from typing import Annotated, Any, Optional
 import typer
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -49,7 +50,7 @@ def ask(
         extras.append("graph: " + ", ".join(context.symbols + context.files))
     if context.summaries:
         extras.append(f"{len(context.summaries)} summaries")
-    console.print(f"[dim]{root} | {' | '.join(extras)} | {chat_model}[/]", highlight=False)
+    console.print(f"[dim]{escape(f'{root} | ' + ' | '.join(extras) + f' | {chat_model}')}[/]", highlight=False)
     try:
         stats = _stream_answer(
             client, chat_model, context.messages, settings, think if think is not None else settings.think, show_thinking

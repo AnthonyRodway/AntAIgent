@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from rich.markup import escape
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -33,8 +34,8 @@ def learn(
     require_models(client, settings.embed_model)
     embedder = Embedder(client, settings.embed_model, settings.keep_alive, settings.embed_batch)
     db = index_path(settings.home, path)
-    console.print(f"Learning [bold]{path}[/]", highlight=False)
-    console.print(f"[dim]Index: {db}[/]", highlight=False)
+    console.print(f"Learning [bold]{escape(str(path))}[/]", highlight=False)
+    console.print(f"[dim]Index: {escape(str(db))}[/]", highlight=False)
 
     progress = Progress(
         SpinnerColumn(),
