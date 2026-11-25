@@ -88,7 +88,16 @@ class Ollama:
     def running(self) -> list[dict[str, Any]]:
         return self._request("GET", "/api/ps").get("models", [])
 
+    def load(self, model: str, *, keep_alive: str, num_ctx: int | None = None) -> None:
+        """Load a chat model without generating anything, so the next request starts at once.
+        num_ctx must match the later requests', or Ollama loads the model again for them."""
+        payload: dict[str, Any] = {"model": model, "messages": [], "keep_alive": keep_alive}
+        if num_ctx:
+            payload["options"] = {"num_ctx": num_ctx}
+        self._request("POST", "/api/chat", json=payload)
+
     def embed(self, model: str, inputs: list[str], keep_alive: str) -> list[list[float]]:
+        """Embed `inputs`. An empty list just loads the model."""
         data = self._request(
             "POST", "/api/embed", json={"model": model, "input": inputs, "keep_alive": keep_alive, "truncate": True}
         )

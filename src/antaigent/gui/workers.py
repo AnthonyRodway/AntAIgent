@@ -164,6 +164,26 @@ def status_job(settings: Settings):
     return run
 
 
+def warm_up(settings: Settings) -> threading.Thread:
+    """Start loading the embedding and chat models, so a question typed meanwhile is
+    answered without waiting for them: a cold start of a 20B model takes 10-20 seconds.
+
+    A daemon thread rather than a Task: it touches no Qt objects, reports nothing, and
+    mustn't keep the app open while Ollama finishes loading."""
+
+    def run() -> None:
+        try:
+            with Ollama(settings.ollama_url) as client:
+                client.embed(settings.embed_model, [], settings.keep_alive)
+                client.load(settings.chat_model, keep_alive=settings.keep_alive, num_ctx=settings.num_ctx)
+        except Exception:  # only a head start: the question itself loads whatever is missing
+            pass
+
+    thread = threading.Thread(target=run, name="antai-warm-up", daemon=True)
+    thread.start()
+    return thread
+
+
 def watch_job(root: Path, poll: bool = False):
     def run(task: Task):
         watch(root, lambda paths: task.event.emit("changed", sorted(paths)), stop_event=task.stop_event, poll=poll)

@@ -124,7 +124,7 @@ Every setting can be overridden with an environment variable:
 | `ANTAI_EMBED_MODEL` | `nomic-embed-text` | Model that embeds chunks (changing it rebuilds the index) |
 | `ANTAI_THINK` | `low` | Reasoning effort: `low`, `medium`, `high` |
 | `ANTAI_NUM_CTX` | `16384` | Context window requested from Ollama |
-| `ANTAI_KEEP_ALIVE` | `30m` | How long Ollama keeps models loaded between questions |
+| `ANTAI_KEEP_ALIVE` | `30m` | How long Ollama keeps models loaded between questions. The app starts loading them as you type a question, so the first answer doesn't wait for them. |
 | `ANTAI_TOP_K` | `12` | Excerpts retrieved per question |
 | `ANTAI_CONTEXT_CHARS` | `30000` | Upper bound on excerpt text sent to the model |
 | `ANTAI_CHUNK_CHARS` | `2400` | Target chunk size (changing it rebuilds the index) |
@@ -224,14 +224,14 @@ src/antaigent/
 | `panels.py` | The Ask, Search, File, Symbol and Overview tabs, and the sidebar's file tree, symbol finder and saved chats. |
 | `widgets.py` | A code view with line numbers, syntax colouring and highlighted lines, and a browser whose links navigate the app. |
 | `render.py` | Turns Markdown answers and code into the HTML Qt can display, and makes citations into links. |
-| `workers.py` | Background jobs (learn, summarize, ask, search, watch, Ollama status), each on its own thread with its own database connection. |
+| `workers.py` | Background jobs (learn, summarize, ask, search, watch, Ollama status), each on its own thread with its own database connection, and the warm-up that loads the models while a question is typed. |
 
 The tests in `tests/` cover file discovery (`test_walker.py`), chunking (`test_chunking.py`),
 data profiling (`test_profiling.py`), the code graph (`test_graph.py`), indexing, incremental
 updates, graph upkeep and search (`test_index_and_search.py`), learning when Ollama fails or is
-cancelled part way (`test_learn_pipeline.py`), summaries (`test_summarize.py`), saved chats
-(`test_chats.py`), watching (`test_watch.py`), the commands (`test_cli.py`) and the app
-(`test_gui.py`, run without a screen). `conftest.py`
+cancelled part way (`test_learn_pipeline.py`), summaries (`test_summarize.py`), the Ollama
+client (`test_ollama.py`), saved chats (`test_chats.py`), watching (`test_watch.py`), the
+commands (`test_cli.py`) and the app (`test_gui.py`, run without a screen). `conftest.py`
 provides the fake embedder that lets them run without Ollama.
 
 ## Development

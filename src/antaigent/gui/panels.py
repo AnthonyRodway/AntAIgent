@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as dt
 import posixpath
 import sqlite3
+import threading
+import time
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING
 
@@ -42,12 +44,14 @@ from ..query.retrieval import Hit
 from .render import esc, file_link, link, markdown_html, muted, symbol_link
 from .style import GLYPH_ADD, GLYPH_SEARCH, GLYPH_SEND, GLYPH_STOP
 from .widgets import Browser, CodeView
-from .workers import Task, ask_job, search_job
+from .workers import Task, ask_job, search_job, warm_up
 
 if TYPE_CHECKING:
     from .window import MainWindow
 
 MAX_FILE_BYTES = 3_000_000
+# Typing a question loads the models, at most this often (loading a loaded model is free).
+WARM_UP_SECONDS = 120
 EXAMPLE_QUESTIONS = (
     "What does this project do, and how is it organized?",
     "Where does execution start, and what happens first?",
@@ -114,6 +118,8 @@ class AskPanel(QWidget):
         self.conversation_id: int | None = None  # None until the first answer is saved
         self.task: Task | None = None
         self._dirty = False
+        self._warming: threading.Thread | None = None
+        self._warmed_at = float("-inf")
 
         self.view = Browser()
         self.view.link.connect(self._on_link)
@@ -121,6 +127,7 @@ class AskPanel(QWidget):
         self.input.setObjectName("askInput")
         self.input.setPlaceholderText("Ask about the project...   (Ctrl+Enter to send)")
         self.input.setFixedHeight(self.input.fontMetrics().lineSpacing() * 8 + 14)
+        self.input.textChanged.connect(self._warm_up)
         self.send = QPushButton(main.icon(GLYPH_SEND, color="#ffffff"), "Ask")
         self.send.setObjectName("primary")
         self.send.setDefault(True)
@@ -222,12 +229,24 @@ class AskPanel(QWidget):
         self.send.setEnabled(not busy)
         self.stop.setEnabled(busy)
 
+    def _warm_up(self) -> None:
+        """Have Ollama load the models while a question is typed, so the answer doesn't
+        also wait for them to load."""
+        now = time.monotonic()
+        if self.main.root is None or not self.input.toPlainText().strip() or now - self._warmed_at < WARM_UP_SECONDS:
+            return
+        if self._warming is not None and self._warming.is_alive():
+            return
+        self._warmed_at = now
+        self._warming = warm_up(self.main.settings)
+
     def submit(self, question: str | None = None) -> None:
         question = (question or self.input.toPlainText()).strip()
         if not question or self.task is not None or self.main.root is None:
             return
         history = [(t.question, t.answer) for t in self.turns if t.done and t.answer and not t.error][-3:]
         self.turns.append(Turn(question))
+        self._warmed_at = time.monotonic()  # asking keeps the models loaded too
         self.input.clear()
         task = Task(ask_job(self.main.settings, self.main.root, question, history, self.think.currentText()), self)
         task.event.connect(self._on_event)

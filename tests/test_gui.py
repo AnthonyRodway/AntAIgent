@@ -37,8 +37,11 @@ def test_citations_in_answers_become_links():
     assert "【gone.py:1-2】" in bracketed
 
 
-def test_window_opens_a_project_and_navigates(tmp_path, embedder, qapp):
+def test_window_opens_a_project_and_navigates(tmp_path, embedder, qapp, monkeypatch):
     from antaigent.gui.window import MainWindow
+
+    warm_ups = []
+    monkeypatch.setattr("antaigent.gui.panels.warm_up", lambda settings: warm_ups.append(settings))
 
     home, project = tmp_path / "home", tmp_path / "project"
     (project / "pkg").mkdir(parents=True)
@@ -72,6 +75,17 @@ def test_window_opens_a_project_and_navigates(tmp_path, embedder, qapp):
         assert window.tabs.currentWidget() is window.symbol
         window.overview.refresh()
         assert "No overview yet" in window.overview.view.toPlainText()
+
+        # Typing a question has Ollama load the models, but not on every keystroke.
+        window.ask.input.setPlainText("   ")
+        assert warm_ups == []
+        window.ask.input.setPlainText("What does")
+        window.ask.input.setPlainText("What does helper do?")
+        assert len(warm_ups) == 1
+        window.ask._warmed_at -= 1000
+        window.ask.input.setPlainText("What does helper do? ")
+        assert len(warm_ups) == 2
+        window.ask.input.clear()
 
         # Ollama isn't reachable here, so the answer fails, but the chat is still saved.
         window.ask.submit("What does helper do?")
