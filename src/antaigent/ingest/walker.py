@@ -52,26 +52,35 @@ class SourceFile:
     mtime: float
 
 
-def _load_spec(directory: Path, name: str) -> pathspec.PathSpec | None:
-    ignore_file = directory / name
-    if not ignore_file.is_file():
-        return None
+def _load_spec(path: str) -> pathspec.PathSpec | None:
     try:
-        lines = ignore_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
     except OSError:
         return None
     return pathspec.GitIgnoreSpec.from_lines(lines)
 
 
-def _is_link(path: Path) -> bool:
-    isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
-    return path.is_symlink() or bool(isjunction and isjunction(path))
+def _suffix(name: str) -> str:
+    """Lower-cased extension, by the same rule as Path.suffix."""
+    i = name.rfind(".")
+    return name[i:].lower() if 0 < i < len(name) - 1 else ""
 
 
-def _leaves(path: Path, root: Path) -> bool:
+def _is_junction(entry: os.DirEntry) -> bool:
+    if hasattr(entry, "is_junction"):  # Python 3.12+
+        return entry.is_junction()
+    try:  # Windows on older Pythons: a junction is a mount-point reparse point
+        tag = entry.stat(follow_symlinks=False).st_reparse_tag
+    except (OSError, AttributeError):
+        return False
+    return tag == getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
+
+
+def _leaves(path: str, root: Path) -> bool:
     """Whether a symlink or junction points outside the project."""
     try:
-        return not path.resolve().is_relative_to(root)
+        return not Path(path).resolve().is_relative_to(root)
     except OSError:
         return True
 
@@ -79,20 +88,30 @@ def _leaves(path: Path, root: Path) -> bool:
 def walk(root: Path) -> Iterator[SourceFile]:
     """Yield candidate files, honouring .gitignore and .antaiignore files at any depth.
 
-    Links that lead outside the folder are skipped, so learning a folder never reads
-    files from elsewhere on the machine."""
+    Folders are visited depth first in name order, each folder's files before its
+    subfolders. Symlinked folders aren't entered, and other links that lead outside the
+    folder (file symlinks, junctions) are skipped, so learning a folder never reads files
+    from elsewhere on the machine.
+
+    os.scandir already knows each entry's type and link status, so the only system
+    call per file is the stat for its size and time."""
     root = root.resolve()
     defaults = pathspec.GitIgnoreSpec.from_lines(DEFAULT_IGNORES)
     specs: list[tuple[str, pathspec.PathSpec]] = []
+    stack: list[tuple[str, str]] = [(str(root), "")]  # (folder, its path relative to root with a trailing /)
 
-    for dirpath, dirnames, filenames in os.walk(root):
-        directory = Path(dirpath)
-        rel_dir = directory.relative_to(root).as_posix()
-        rel_dir = "" if rel_dir == "." else rel_dir + "/"
-        for name in (".gitignore", ".antaiignore"):
-            spec = _load_spec(directory, name)
-            if spec is not None:
-                specs.append((rel_dir, spec))
+    while stack:
+        directory, rel_dir = stack.pop()
+        try:
+            with os.scandir(directory) as it:
+                entries = sorted(it, key=lambda e: e.name)
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.name in (".gitignore", ".antaiignore") and entry.is_file():
+                spec = _load_spec(entry.path)
+                if spec is not None:
+                    specs.append((rel_dir, spec))
         active = [(base, spec) for base, spec in specs if rel_dir.startswith(base)]
 
         def ignored(rel: str, is_dir: bool) -> bool:
@@ -101,20 +120,30 @@ def walk(root: Path) -> Iterator[SourceFile]:
                 return True
             return any(spec.match_file(probe[len(base):]) for base, spec in active)
 
-        dirnames[:] = sorted(
-            d for d in dirnames
-            if not ignored(rel_dir + d, True) and not (_is_link(directory / d) and _leaves(directory / d, root))
-        )
-        for name in sorted(filenames):
-            rel = rel_dir + name
-            if Path(name).suffix.lower() in SKIP_EXTENSIONS or ignored(rel, False):
-                continue
-            path = directory / name
+        subdirs: list[tuple[str, str]] = []
+        for entry in entries:
+            name, rel = entry.name, rel_dir + entry.name
             try:
-                st = path.stat()
+                is_dir = entry.is_dir()  # follows links, like os.walk
+            except OSError:
+                is_dir = False
+            if is_dir:
+                if ignored(rel, True) or entry.is_symlink():
+                    continue
+                if _is_junction(entry) and _leaves(entry.path, root):
+                    continue
+                subdirs.append((entry.path, rel + "/"))
+                continue
+            if _suffix(name) in SKIP_EXTENSIONS or ignored(rel, False):
+                continue
+            try:
+                # A real stat rather than the cached scandir one: Windows can update a
+                # folder's listing late for a file still open for writing.
+                st = os.stat(entry.path)
             except OSError:
                 continue
-            if path.is_symlink() and _leaves(path, root):
+            if entry.is_symlink() and _leaves(entry.path, root):
                 continue
             if stat.S_ISREG(st.st_mode):
-                yield SourceFile(path, rel, st.st_size, st.st_mtime)
+                yield SourceFile(Path(entry.path), rel, st.st_size, st.st_mtime)
+        stack.extend(reversed(subdirs))

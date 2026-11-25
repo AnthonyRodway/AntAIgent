@@ -59,6 +59,26 @@ def test_walk_does_not_follow_links_out_of_the_project(tmp_path):
     assert rels == {"app.py", "lib/util.py", "alias.py"}
 
 
+@pytest.mark.skipif(os.name != "nt", reason="junctions are a Windows feature")
+def test_walk_does_not_follow_junctions_out_of_the_project(tmp_path):
+    import _winapi
+
+    project, outside = tmp_path / "project", tmp_path / "outside"
+    write(project / "app.py")
+    write(project / "lib" / "util.py")
+    write(outside / "credentials.txt", "secret")
+    _winapi.CreateJunction(str(outside), str(project / "linked"))
+    _winapi.CreateJunction(str(project / "lib"), str(project / "mirror"))  # stays inside: followed
+    rels = [f.rel for f in walk(project)]
+    assert rels == ["app.py", "lib/util.py", "mirror/util.py"]
+
+
+def test_walk_order_is_files_first_then_folders_by_name(tmp_path):
+    for name in ("b.txt", "a/z.txt", "a/b/c.txt", "c/d.txt", "a.txt", "a/y.txt"):
+        write(tmp_path / name)
+    assert [f.rel for f in walk(tmp_path)] == ["a.txt", "b.txt", "a/y.txt", "a/z.txt", "a/b/c.txt", "c/d.txt"]
+
+
 def test_walk_reports_size_and_forward_slash_paths(tmp_path):
     write(tmp_path / "a" / "b" / "c.txt", "hello")
     (f,) = [f for f in walk(tmp_path) if f.rel.endswith("c.txt")]
