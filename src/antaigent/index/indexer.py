@@ -5,7 +5,10 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Protocol
@@ -25,6 +28,15 @@ DATA_PREVIEW_BYTES = 64 * 1024
 # Notebooks are mostly embedded output images; only their cell sources get indexed.
 MAX_NOTEBOOK_BYTES = 25_000_000
 MAX_DATA_BYTES = 4_000_000_000
+
+# Opening a file can take over 10 ms on Windows while antivirus scans it, so files are
+# read several at a time, a bounded distance ahead of the one being chunked.
+READ_THREADS = 8
+READ_AHEAD_FILES = 64
+READ_AHEAD_BYTES = 64_000_000
+# Files stored without chunks (skipped, empty, unchanged but touched) are written in
+# batches too; this many waiting are written without waiting for the next embedding.
+MAX_WAITING_RECORDS = 500
 
 
 class DocumentEmbedder(Protocol):
@@ -110,6 +122,139 @@ def _decode(data: bytes) -> str:
         return data.decode("cp1252", errors="replace")
 
 
+@dataclass(frozen=True)
+class _Loaded:
+    data: bytes
+    sha1: str
+    reason: str | None  # why the file is skipped, if it is
+
+
+def _load(f: SourceFile, max_file_bytes: int) -> _Loaded:
+    """Read and fingerprint one file. Runs on a worker thread, so it touches nothing shared.
+    Data files that get profiled are only hashed here: DuckDB reads them itself."""
+    ext = PurePosixPath(f.rel).suffix.lower()
+    if ext in PROFILE_EXTENSIONS:
+        if f.size > MAX_DATA_BYTES:
+            return _Loaded(b"", f"size:{f.size}", f"larger than {MAX_DATA_BYTES // 1_000_000:,} MB")
+        return _Loaded(b"", _sha1_file(f), None)
+    data, reason = _read(f, max_file_bytes)
+    if reason is None and ext in (".html", ".htm"):
+        generator = _generated_docs(data)
+        reason = f"generated API docs ({generator})" if generator else None
+    return _Loaded(data, hashlib.sha1(data).hexdigest(), reason)
+
+
+def _read_ahead(
+    files: list[SourceFile], load: Callable[[SourceFile], _Loaded]
+) -> Iterator[tuple[SourceFile, Future[_Loaded]]]:
+    """Yield each file, in order, with its load() already running on a thread pool.
+    Close the generator to stop: reads not yet started are cancelled."""
+    pool = ThreadPoolExecutor(READ_THREADS, thread_name_prefix="antai-read")
+    window: deque[tuple[SourceFile, Future[_Loaded], int]] = deque()
+    queued = 0
+    upcoming = iter(files)
+    try:
+        while True:
+            while len(window) < READ_AHEAD_FILES and (not window or queued < READ_AHEAD_BYTES):
+                f = next(upcoming, None)
+                if f is None:
+                    break
+                held = min(f.size, MAX_NOTEBOOK_BYTES)  # the most one load keeps in memory
+                window.append((f, pool.submit(load, f), held))
+                queued += held
+            if not window:
+                return
+            f, future, held = window.popleft()
+            queued -= held
+            yield f, future
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+class _Writer:
+    """Stores what learning produces. Chunks are embedded a batch at a time on a background
+    thread, so Ollama works on one batch while the next is read and chunked, and each
+    batch is written in one transaction together with the files stored without chunks.
+
+    SQLite connections belong to one thread, so all writes happen on the caller's."""
+
+    def __init__(self, store: Store, embedder: DocumentEmbedder, report: LearnReport):
+        self.store, self.embedder, self.report = store, embedder, report
+        self.written: list[str] = []  # every path stored, for re-resolving their imports
+        self.new_paths = False  # whether a file was stored that the index didn't have
+        self._pool = ThreadPoolExecutor(1, thread_name_prefix="antai-embed")
+        self._batch: list[tuple[FileRecord, list[Chunk], FileGraph | None, bool]] = []
+        self._batch_chunks = 0
+        self._embedding: tuple[list[tuple[FileRecord, list[Chunk], FileGraph | None, bool]], Future[np.ndarray]] | None = None
+        self._records: list[FileRecord] = []
+        self._touches: list[SourceFile] = []
+
+    def add(self, record: FileRecord, chunks: list[Chunk], graph: FileGraph | None, is_new: bool) -> None:
+        self._batch.append((record, chunks, graph, is_new))
+        self._batch_chunks += len(chunks)
+        if self._batch_chunks >= self.embedder.batch_size * 4:
+            self._send()
+
+    def add_record(self, record: FileRecord, is_new: bool) -> None:
+        """A file stored without chunks: skipped, empty, or failed to parse."""
+        self._records.append(record)
+        self.new_paths |= is_new
+        if len(self._records) + len(self._touches) >= MAX_WAITING_RECORDS:
+            self._write()
+
+    def touch(self, f: SourceFile) -> None:
+        """A file whose content is unchanged although its size or time changed."""
+        self._touches.append(f)
+        if len(self._records) + len(self._touches) >= MAX_WAITING_RECORDS:
+            self._write()
+
+    def finish(self) -> None:
+        if self._batch:
+            self._send()
+        self._receive()
+
+    def close(self) -> None:
+        """Stop the embedding thread, dropping a batch that hasn't been sent to Ollama yet."""
+        self._pool.shutdown(wait=True, cancel_futures=True)
+
+    def _send(self) -> None:
+        batch = self._batch
+        texts = [embedding_text(rec.path, c) for rec, chunks, _, _ in batch for c in chunks]
+        future = self._pool.submit(self.embedder.embed_documents, texts)
+        self._batch, self._batch_chunks = [], 0
+        self._receive()  # store the previous batch while this one is embedded
+        self._embedding = (batch, future)
+
+    def _receive(self) -> None:
+        if self._embedding is None:
+            self._write()
+            return
+        batch, future = self._embedding
+        self._embedding = None
+        self._write(batch, future.result())
+
+    def _write(self, batch=(), vectors: np.ndarray | None = None) -> None:
+        report = self.report
+        with self.store.transaction():
+            offset = 0
+            for record, chunks, graph, is_new in batch:
+                self.store.put_file(record, chunks, vectors[offset : offset + len(chunks)], graph)
+                offset += len(chunks)
+                report.chunks += len(chunks)
+                if is_new:
+                    report.added += 1
+                else:
+                    report.updated += 1
+                self.written.append(record.path)
+                self.new_paths |= is_new
+            for record in self._records:
+                self.store.put_file(record)
+                self.written.append(record.path)
+            for f in self._touches:
+                self.store.touch_file(f.rel, f.size, f.mtime)
+        self._records, self._touches = [], []
+
+
 def learn(
     root: Path,
     store: Store,
@@ -133,9 +278,11 @@ def learn(
     files = list(walk(root))
     report.scanned = len(files)
     seen = {f.rel for f in files}
-    for path in sorted(set(known) - seen):
-        store.delete_file(path)
-        report.removed += 1
+    removed = sorted(set(known) - seen)
+    with store.transaction():
+        for path in removed:
+            store.delete_file(path)
+    report.removed = len(removed)
 
     todo = []
     for f in files:
@@ -147,86 +294,65 @@ def learn(
 
     chunker = Chunker(chunk_chars)
     extractor = GraphExtractor(chunker.parser)
-    pending: list[tuple[FileRecord, list[Chunk], FileGraph | None, bool]] = []
-    pending_chunks = 0
-
-    def flush() -> None:
-        nonlocal pending, pending_chunks
-        texts = [embedding_text(rec.path, c) for rec, chunks, _, _ in pending for c in chunks]
-        vectors = embedder.embed_documents(texts)
-        offset = 0
-        for rec, chunks, graph, is_new in pending:
-            store.put_file(rec, chunks, vectors[offset : offset + len(chunks)], graph)
-            offset += len(chunks)
-            report.chunks += len(chunks)
-            if is_new:
-                report.added += 1
-            else:
-                report.updated += 1
-        pending, pending_chunks = [], 0
+    writer = _Writer(store, embedder, report)
 
     def record(f: SourceFile, sha: str, status: str, n_chunks: int = 0) -> FileRecord:
         return FileRecord(f.rel, f.size, f.mtime, sha, status, n_chunks)
 
-    for done, f in enumerate(todo):
-        if progress:
-            progress(done, len(todo), f.rel)
-        prev = known.get(f.rel)
-        ext = PurePosixPath(f.rel).suffix.lower()
-        graph: FileGraph | None = None
-        try:
-            if ext in PROFILE_EXTENSIONS:
-                if f.size > MAX_DATA_BYTES:
-                    data, reason = b"", f"larger than {MAX_DATA_BYTES // 1_000_000:,} MB"
-                    sha = f"size:{f.size}"
-                else:
-                    data, reason = b"", None
-                    sha = _sha1_file(f)
-            else:
-                data, reason = _read(f, max_file_bytes)
-                sha = hashlib.sha1(data).hexdigest()
-                if reason is None and ext in (".html", ".htm"):
-                    generator = _generated_docs(data)
-                    reason = f"generated API docs ({generator})" if generator else None
-        except OSError as exc:
-            report.errors.append(f"{f.rel}: {exc}")
-            continue
-        if prev is not None and prev.sha1 == sha:
-            store.touch_file(f.rel, f.size, f.mtime)
-            report.unchanged += 1
-            continue
-        if reason:
-            store.put_file(record(f, sha, f"skipped: {reason}"))
-            report.skipped += 1
-            continue
-        try:
-            if ext in PROFILE_EXTENSIONS:
-                chunks = _profile(f, ext, chunker)
-            else:
-                text = _decode(data)
-                chunks = chunker.chunk(f.rel, text)
-                graph = extractor.extract(f.rel, text)
-        except ProfileError as exc:
-            store.put_file(record(f, sha, f"skipped: {exc}"))
-            report.skipped += 1
-            continue
-        except Exception as exc:  # one unparseable file must not stop the whole run
-            report.errors.append(f"{f.rel}: {type(exc).__name__}: {exc}")
-            store.put_file(record(f, sha, f"error: {type(exc).__name__}"))
-            continue
-        if not chunks:
-            store.put_file(record(f, sha, "empty"))
-            report.skipped += 1
-            continue
-        pending.append((record(f, sha, "indexed", len(chunks)), chunks, graph, prev is None))
-        pending_chunks += len(chunks)
-        if pending_chunks >= embedder.batch_size * 4:
-            flush()
+    try:
+        with closing(_read_ahead(todo, lambda f: _load(f, max_file_bytes))) as loads:
+            for done, (f, loading) in enumerate(loads):
+                if progress:
+                    progress(done, len(todo), f.rel)
+                prev = known.get(f.rel)
+                is_new = prev is None
+                ext = PurePosixPath(f.rel).suffix.lower()
+                try:
+                    loaded = loading.result()
+                except OSError as exc:
+                    report.errors.append(f"{f.rel}: {exc}")
+                    continue
+                sha = loaded.sha1
+                if prev is not None and prev.sha1 == sha:
+                    writer.touch(f)
+                    report.unchanged += 1
+                    continue
+                if loaded.reason:
+                    writer.add_record(record(f, sha, f"skipped: {loaded.reason}"), is_new)
+                    report.skipped += 1
+                    continue
+                graph: FileGraph | None = None
+                try:
+                    if ext in PROFILE_EXTENSIONS:
+                        chunks = _profile(f, ext, chunker)
+                    else:
+                        text = _decode(loaded.data)
+                        tree = chunker.parse(f.rel, text)
+                        chunks = chunker.chunk(f.rel, text, tree)
+                        graph = extractor.extract(f.rel, text, tree)
+                except ProfileError as exc:
+                    writer.add_record(record(f, sha, f"skipped: {exc}"), is_new)
+                    report.skipped += 1
+                    continue
+                except Exception as exc:  # one unparseable file must not stop the whole run
+                    report.errors.append(f"{f.rel}: {type(exc).__name__}: {exc}")
+                    writer.add_record(record(f, sha, f"error: {type(exc).__name__}"), is_new)
+                    continue
+                if not chunks:
+                    writer.add_record(record(f, sha, "empty"), is_new)
+                    report.skipped += 1
+                    continue
+                writer.add(record(f, sha, "indexed", len(chunks)), chunks, graph, is_new)
+        writer.finish()
+    finally:
+        writer.close()
 
-    if pending:
-        flush()
-    if report.changed:
+    # Where an import leads depends only on which files exist, so unless files came or
+    # went, only the imports of the files just stored need resolving.
+    if report.rebuilt or report.removed or writer.new_paths:
         store.relink_imports()
+    elif writer.written:
+        store.relink_imports(writer.written)
     if progress:
         progress(len(todo), len(todo), "")
 

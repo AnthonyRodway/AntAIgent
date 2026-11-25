@@ -264,7 +264,15 @@ class Chunker:
             self._parsers[language] = parser
         return self._parsers[language]
 
-    def chunk(self, rel: str, text: str) -> list[Chunk]:
+    def parse(self, rel: str, text: str):
+        """The tree-sitter tree for a code file, or None. Pass it to chunk() and to
+        GraphExtractor.extract() so the file is only parsed once."""
+        language = CODE_LANGUAGES.get(PurePosixPath(rel).suffix.lower())
+        parser = self.parser(language) if language else None
+        return parser.parse(text.encode("utf-8")) if parser is not None else None
+
+    def chunk(self, rel: str, text: str, tree=None) -> list[Chunk]:
+        """`tree` is the file's parse from parse(), if the caller already has it."""
         ext = PurePosixPath(rel).suffix.lower()
         if ext in DATA_EXTENSIONS:
             chunks = _data_preview(rel, text, self.max_chars)
@@ -281,17 +289,18 @@ class Chunker:
             if ext in DOC_EXTENSIONS:
                 chunks = _markdown(lines, self.max_chars)
             elif ext in CODE_LANGUAGES:
-                chunks = self._code(CODE_LANGUAGES[ext], text, lines)
+                chunks = self._code(CODE_LANGUAGES[ext], text, lines, tree)
             else:
                 chunks = line_windows(lines, 0, len(lines) - 1, self.max_chars, "text")
         return [c for c in chunks if c.text.strip()]
 
-    def _code(self, language: str, text: str, lines: list[str]) -> list[Chunk]:
-        parser = self.parser(language)
-        if parser is None:
-            self.missing_grammars.add(language)
-            return line_windows(lines, 0, len(lines) - 1, self.max_chars, "code")
-        tree = parser.parse(text.encode("utf-8"))
+    def _code(self, language: str, text: str, lines: list[str], tree=None) -> list[Chunk]:
+        if tree is None:
+            parser = self.parser(language)
+            if parser is None:
+                self.missing_grammars.add(language)
+                return line_windows(lines, 0, len(lines) - 1, self.max_chars, "code")
+            tree = parser.parse(text.encode("utf-8"))
         units: list[_Unit] = []
         _collect_units(tree.root_node, self.max_chars, "", units)
         return _merge_units(units, lines, self.max_chars, "code")

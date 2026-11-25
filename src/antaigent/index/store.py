@@ -11,7 +11,8 @@ from __future__ import annotations
 import re
 import sqlite3
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -211,6 +212,7 @@ class Store:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(_SCHEMA)
         self._vectors: tuple[np.ndarray, np.ndarray] | None = None
+        self._in_transaction = False
 
     def close(self) -> None:
         self.conn.close()
@@ -221,12 +223,28 @@ class Store:
     def __exit__(self, *exc) -> None:
         self.close()
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Commit everything written inside the block at once, or nothing if it fails.
+
+        Writes outside one commit individually, and each commit costs a few
+        milliseconds, so learning writes files in batches. Nested blocks join the outer one."""
+        if self._in_transaction:
+            yield
+            return
+        self._in_transaction = True
+        try:
+            with self.conn:
+                yield
+        finally:
+            self._in_transaction = False
+
     def get_meta(self, key: str) -> str | None:
         row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return row[0] if row else None
 
     def set_meta(self, key: str, value: str) -> None:
-        with self.conn:
+        with self.transaction():
             self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
     def files(self) -> dict[str, FileRecord]:
@@ -240,7 +258,7 @@ class Store:
         return FileRecord(*row) if row else None
 
     def touch_file(self, path: str, size: int, mtime: float) -> None:
-        with self.conn:
+        with self.transaction():
             self.conn.execute("UPDATE files SET size = ?, mtime = ? WHERE path = ?", (size, mtime, path))
 
     def put_file(
@@ -255,7 +273,7 @@ class Store:
         The file's summary is dropped too, since it described the old content."""
         if chunks and (embeddings is None or len(embeddings) != len(chunks)):
             raise ValueError("every chunk needs an embedding")
-        with self.conn:
+        with self.transaction():
             self._delete_chunks(record.path)
             self._delete_graph(record.path)
             self.conn.execute("DELETE FROM summaries WHERE scope = 'file' AND key = ?", (record.path,))
@@ -279,7 +297,7 @@ class Store:
         self._vectors = None
 
     def delete_file(self, path: str) -> None:
-        with self.conn:
+        with self.transaction():
             self._delete_chunks(path)
             self._delete_graph(path)
             self.conn.execute("DELETE FROM summaries WHERE scope = 'file' AND key = ?", (path,))
@@ -311,7 +329,7 @@ class Store:
         )
 
     def clear(self) -> None:
-        with self.conn:
+        with self.transaction():
             for table in _TABLES:
                 self.conn.execute(f"DELETE FROM {table}")
         self._vectors = None
@@ -467,17 +485,32 @@ class Store:
                 found.add(name)
         return found
 
-    def relink_imports(self) -> int:
-        """Resolve every stored import against the current set of files. Returns the number of links."""
+    def relink_imports(self, paths: Iterable[str] | None = None) -> int:
+        """Resolve stored imports against the current set of files. Returns the number of links.
+
+        With `paths`, only the imports in those files are redone. That is enough when files
+        changed but none were added or removed, because where an import leads depends only
+        on which files exist."""
         resolver = ImportResolver(self.files())
-        rows = self.conn.execute("SELECT id, path, module, names, language FROM imports").fetchall()
+        sql = "SELECT id, path, module, names, language FROM imports"
+        if paths is None:
+            rows = self.conn.execute(sql).fetchall()
+        else:
+            wanted = list(dict.fromkeys(paths))
+            rows = []
+            for i in range(0, len(wanted), 400):
+                batch = wanted[i : i + 400]
+                rows += self.conn.execute(f"{sql} WHERE path IN ({','.join('?' * len(batch))})", batch).fetchall()
         links = [
             (import_id, path, target)
             for import_id, path, module, names, language in rows
             for target in resolver.resolve(path, language, module, [n for n in names.split(",") if n])
         ]
-        with self.conn:
-            self.conn.execute("DELETE FROM import_targets")
+        with self.transaction():
+            if paths is None:
+                self.conn.execute("DELETE FROM import_targets")
+            else:
+                self.conn.executemany("DELETE FROM import_targets WHERE source = ?", [(p,) for p in wanted])
             self.conn.executemany("INSERT INTO import_targets (import_id, source, target) VALUES (?, ?, ?)", links)
         return len(links)
 

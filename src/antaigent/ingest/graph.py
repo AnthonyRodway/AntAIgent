@@ -78,15 +78,17 @@ class GraphExtractor:
             self._queries[language] = query
         return self._queries[language]
 
-    def extract(self, rel: str, text: str) -> FileGraph | None:
+    def extract(self, rel: str, text: str, tree=None) -> FileGraph | None:
+        """`tree` is the file's tree-sitter parse, if the caller already has it."""
         language = CODE_LANGUAGES.get(PurePosixPath(rel).suffix.lower())
         if language is None:
             return None
         graph = FileGraph(language, imports=find_imports(language, text))
-        parser = self._parser_for(language)
-        if parser is None:
-            return graph
-        tree = parser.parse(text.encode("utf-8"))
+        if tree is None:
+            parser = self._parser_for(language)
+            if parser is None:
+                return graph
+            tree = parser.parse(text.encode("utf-8"))
         lines = split_lines(text)
         query = self._query(language)
         if query is not None:

@@ -47,6 +47,17 @@ def test_python_definitions_references_and_callers():
     assert call.line == 12 and "format_rows(rows)" in call.snippet
 
 
+@pytest.mark.skipif(not python_grammar_installed(), reason="python tree-sitter grammar not downloaded")
+def test_one_parse_serves_both_chunking_and_the_graph():
+    chunker = Chunker(200)
+    extractor = GraphExtractor(chunker.parser)
+    tree = chunker.parse("pkg/report.py", PYTHON)
+    assert tree is not None
+    assert chunker.chunk("pkg/report.py", PYTHON, tree) == chunker.chunk("pkg/report.py", PYTHON)
+    assert extractor.extract("pkg/report.py", PYTHON, tree) == extractor.extract("pkg/report.py", PYTHON)
+    assert chunker.parse("README.md", "# Title\n") is None
+
+
 def test_python_imports():
     imports = {(i.module, i.names) for i in find_imports("python", PYTHON)}
     assert ("os", ()) in imports and ("sys", ()) in imports

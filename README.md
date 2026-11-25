@@ -156,6 +156,10 @@ Re-running `learn` compares each file's size, modification time and content hash
 new or changed files are re-processed. Deleted files are removed from the index, and so are
 their summaries and graph entries.
 
+Learning keeps Ollama busy: files are read several at a time (antivirus scanning makes
+each file slow to open on Windows), and each batch of chunks is embedded while the next
+files are chunked and mapped, so a large folder learns at about the speed Ollama embeds.
+
 ## Project layout
 
 All the code is in `src/antaigent/`, grouped by pipeline stage:
@@ -182,7 +186,7 @@ src/antaigent/
 | `ingest/chunking.py` | Splits each file into chunks that keep their line numbers: code by function and class (tree-sitter), Markdown by heading, notebooks by cell, and other text in line windows. |
 | `ingest/profiling.py` | Profiles CSV, TSV, Parquet and Excel files with DuckDB (types, ranges, common values, empties, sample rows) and describes SQLite and GeoPackage tables. |
 | `ingest/graph.py` | Finds definitions and call sites with tree-sitter tags queries, finds imports for each language, and resolves imports to project files. |
-| `index/indexer.py` | Runs `learn`: walks the folder, works out which files changed, then chunks, profiles and maps them, embeds the chunks in batches and saves everything to the store. |
+| `index/indexer.py` | Runs `learn`: walks the folder, works out which files changed, reads them a few at a time, then chunks, profiles and maps them. Each batch of chunks is embedded on a background thread while the next is prepared, and saved to the store in one transaction. |
 | `index/store.py` | The per-project SQLite database: file records, chunks, embeddings, the keyword index, the code graph and summaries, plus the queries that read them. |
 | `index/summarize.py` | Has the chat model summarize each file, then each folder from its contents, then the project; fingerprints each summary so only stale ones are redone. |
 | `index/watch.py` | Watches a folder for changes (with `watchfiles`) so the index can be brought up to date. |
@@ -224,9 +228,10 @@ src/antaigent/
 
 The tests in `tests/` cover file discovery (`test_walker.py`), chunking (`test_chunking.py`),
 data profiling (`test_profiling.py`), the code graph (`test_graph.py`), indexing, incremental
-updates, graph upkeep and search (`test_index_and_search.py`), summaries (`test_summarize.py`),
-saved chats (`test_chats.py`), watching (`test_watch.py`), the commands (`test_cli.py`) and the
-app (`test_gui.py`, run without a screen). `conftest.py`
+updates, graph upkeep and search (`test_index_and_search.py`), learning when Ollama fails or is
+cancelled part way (`test_learn_pipeline.py`), summaries (`test_summarize.py`), saved chats
+(`test_chats.py`), watching (`test_watch.py`), the commands (`test_cli.py`) and the app
+(`test_gui.py`, run without a screen). `conftest.py`
 provides the fake embedder that lets them run without Ollama.
 
 ## Development
