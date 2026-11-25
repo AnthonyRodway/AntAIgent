@@ -50,7 +50,8 @@ def watch(
         try:
             with Store(index_path(settings.home, root)) as store:
                 report = learn_folder(
-                    root, store, embedder, max_file_bytes=settings.max_file_bytes, chunk_chars=settings.chunk_chars
+                    root, store, embedder, max_file_bytes=settings.max_file_bytes,
+                    max_pdf_bytes=settings.max_pdf_bytes, chunk_chars=settings.chunk_chars,
                 )
                 registry.touch(root)
                 if report.changed:

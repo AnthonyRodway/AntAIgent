@@ -25,7 +25,7 @@ MAX_HISTORY_ANSWER = 2_000
 
 def format_hit(hit: Hit) -> str:
     c = hit.chunk
-    unit = {"notebook": "cells", "data": "data profile"}.get(c.kind, "lines")
+    unit = {"notebook": "cells", "data": "data profile", "pdf": "pages"}.get(c.kind, "lines")
     symbols = f" | {', '.join(c.symbols[:6])}" if c.symbols else ""
     lang = PurePosixPath(c.path).suffix.lstrip(".").lower()
     # Four-backtick fences survive excerpts that themselves contain ``` blocks.

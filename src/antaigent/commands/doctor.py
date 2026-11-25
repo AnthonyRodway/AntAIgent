@@ -57,6 +57,7 @@ def doctor() -> None:
     for module, purpose, hint in (
         ("duckdb", "data file profiling (CSV, Parquet, Excel)", "uv pip install duckdb"),
         ("openpyxl", "Excel profiling", "uv pip install openpyxl"),
+        ("pypdf", "reading PDFs", "uv pip install pypdf"),
         ("watchfiles", "antai watch", "uv pip install watchfiles"),
         ("PySide6", "the desktop app (antai gui)", 'uv pip install -e ".[gui]"'),
     ):

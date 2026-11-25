@@ -17,12 +17,17 @@ import numpy as np
 
 from ..ingest.chunking import DATA_EXTENSIONS, NOTEBOOK_EXTENSIONS, Chunk, Chunker
 from ..ingest.graph import FileGraph, GraphExtractor
+from ..ingest.pdf import PDF_EXTENSIONS, PdfError, read_pdf
+from ..ingest.pdf import available as can_read_pdfs
 from ..ingest.profiling import PROFILE_EXTENSIONS, ProfileError, profile_chunks
 from ..ingest.walker import SourceFile, walk
 from .store import FileRecord, Store
 
 # Bump when what gets stored changes, so existing indexes rebuild on the next learn.
 PIPELINE_VERSION = 2
+# Bump when PDFs are read differently, so the next learn reads every PDF again without
+# rebuilding the rest of the index.
+PDF_READER_VERSION = 1
 
 DATA_PREVIEW_BYTES = 64 * 1024
 # Notebooks are mostly embedded output images; only their cell sources get indexed.
@@ -77,15 +82,20 @@ def index_signature(embed_model: str, chunk_chars: int) -> str:
     return f"{embed_model}|{chunk_chars}|v{PIPELINE_VERSION}"
 
 
-def _read(f: SourceFile, max_file_bytes: int) -> tuple[bytes, str | None]:
+def _read(f: SourceFile, max_file_bytes: int, max_pdf_bytes: int) -> tuple[bytes, str | None]:
     """Return (content, skip reason)."""
     ext = PurePosixPath(f.rel).suffix.lower()
-    limit = MAX_NOTEBOOK_BYTES if ext in NOTEBOOK_EXTENSIONS else max_file_bytes
+    if ext in NOTEBOOK_EXTENSIONS:
+        limit = MAX_NOTEBOOK_BYTES
+    elif ext in PDF_EXTENSIONS:
+        limit = max_pdf_bytes
+    else:
+        limit = max_file_bytes
     if f.size > limit:
         return b"", f"larger than {limit // 1000:,} KB"
     with open(f.path, "rb") as fh:
         data = fh.read()
-    if b"\x00" in data[:8192]:
+    if b"\x00" in data[:8192] and ext not in PDF_EXTENSIONS:
         return data, "binary"
     return data, None
 
@@ -129,7 +139,7 @@ class _Loaded:
     reason: str | None  # why the file is skipped, if it is
 
 
-def _load(f: SourceFile, max_file_bytes: int) -> _Loaded:
+def _load(f: SourceFile, max_file_bytes: int, max_pdf_bytes: int) -> _Loaded:
     """Read and fingerprint one file. Runs on a worker thread, so it touches nothing shared.
     Data files that get profiled are only hashed here: DuckDB reads them itself."""
     ext = PurePosixPath(f.rel).suffix.lower()
@@ -137,7 +147,7 @@ def _load(f: SourceFile, max_file_bytes: int) -> _Loaded:
         if f.size > MAX_DATA_BYTES:
             return _Loaded(b"", f"size:{f.size}", f"larger than {MAX_DATA_BYTES // 1_000_000:,} MB")
         return _Loaded(b"", _sha1_file(f), None)
-    data, reason = _read(f, max_file_bytes)
+    data, reason = _read(f, max_file_bytes, max_pdf_bytes)
     if reason is None and ext in (".html", ".htm"):
         generator = _generated_docs(data)
         reason = f"generated API docs ({generator})" if generator else None
@@ -261,6 +271,7 @@ def learn(
     embedder: DocumentEmbedder,
     *,
     max_file_bytes: int = 1_000_000,
+    max_pdf_bytes: int = 2_000_000,
     chunk_chars: int = 2400,
     full: bool = False,
     progress: ProgressFn | None = None,
@@ -284,10 +295,16 @@ def learn(
             store.delete_file(path)
     report.removed = len(removed)
 
+    # PDFs learned before PDFs could be read (or with an older reader) are read again.
+    reread_pdfs = store.get_meta("pdf_reader") != str(PDF_READER_VERSION)
+
+    def stale(f: SourceFile) -> bool:
+        return reread_pdfs and PurePosixPath(f.rel).suffix.lower() in PDF_EXTENSIONS
+
     todo = []
     for f in files:
         rec = known.get(f.rel)
-        if rec is not None and rec.size == f.size and rec.mtime == f.mtime:
+        if rec is not None and rec.size == f.size and rec.mtime == f.mtime and not stale(f):
             report.unchanged += 1
         else:
             todo.append(f)
@@ -300,7 +317,7 @@ def learn(
         return FileRecord(f.rel, f.size, f.mtime, sha, status, n_chunks)
 
     try:
-        with closing(_read_ahead(todo, lambda f: _load(f, max_file_bytes))) as loads:
+        with closing(_read_ahead(todo, lambda f: _load(f, max_file_bytes, max_pdf_bytes))) as loads:
             for done, (f, loading) in enumerate(loads):
                 if progress:
                     progress(done, len(todo), f.rel)
@@ -313,7 +330,7 @@ def learn(
                     report.errors.append(f"{f.rel}: {exc}")
                     continue
                 sha = loaded.sha1
-                if prev is not None and prev.sha1 == sha:
+                if prev is not None and prev.sha1 == sha and not stale(f):
                     writer.touch(f)
                     report.unchanged += 1
                     continue
@@ -325,12 +342,14 @@ def learn(
                 try:
                     if ext in PROFILE_EXTENSIONS:
                         chunks = _profile(f, ext, chunker)
+                    elif ext in PDF_EXTENSIONS:
+                        chunks = chunker.chunk_pages(read_pdf(loaded.data))
                     else:
                         text = _decode(loaded.data)
                         tree = chunker.parse(f.rel, text)
                         chunks = chunker.chunk(f.rel, text, tree)
                         graph = extractor.extract(f.rel, text, tree)
-                except ProfileError as exc:
+                except (ProfileError, PdfError) as exc:
                     writer.add_record(record(f, sha, f"skipped: {exc}"), is_new)
                     report.skipped += 1
                     continue
@@ -356,6 +375,9 @@ def learn(
     if progress:
         progress(len(todo), len(todo), "")
 
+    # Without pypdf every PDF was skipped, so they are read again once it's installed.
+    if reread_pdfs and can_read_pdfs():
+        store.set_meta("pdf_reader", str(PDF_READER_VERSION))
     store.set_meta("last_learn", str(time.time()))
     report.missing_grammars = chunker.missing_grammars
     report.seconds = time.perf_counter() - started

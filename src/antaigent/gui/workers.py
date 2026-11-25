@@ -92,8 +92,8 @@ def learn_job(settings: Settings, root: Path, full: bool = False):
         with _client(settings, settings.embed_model) as client, Store(index_path(settings.home, root)) as store:
             report = learn(
                 root, store, _embedder(settings, client),
-                max_file_bytes=settings.max_file_bytes, chunk_chars=settings.chunk_chars,
-                full=full, progress=progress,
+                max_file_bytes=settings.max_file_bytes, max_pdf_bytes=settings.max_pdf_bytes,
+                chunk_chars=settings.chunk_chars, full=full, progress=progress,
             )
         Registry(settings.home).touch(root)
         return report

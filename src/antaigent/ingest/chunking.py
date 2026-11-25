@@ -1,9 +1,9 @@
 """Split files into retrievable chunks that keep their line numbers.
 
 Code is split along syntax-tree boundaries (functions, classes, methods) using
-tree-sitter, Markdown along headings, notebooks by cell, and everything else into
-overlapping line windows. Data files are normally profiled instead (profiling.py);
-the CSV/TSV preview here is the fallback when that fails.
+tree-sitter, Markdown along headings, notebooks by cell, PDFs by page, and everything
+else into overlapping line windows. Data files are normally profiled instead
+(profiling.py); the CSV/TSV preview here is the fallback when that fails.
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ DATA_PREVIEW_ROWS = 20
 @dataclass
 class Chunk:
     text: str
-    start_line: int  # 1-based and inclusive; cell numbers for notebooks
+    start_line: int  # 1-based and inclusive; cell numbers for notebooks, page numbers for PDFs
     end_line: int
-    kind: str  # code | doc | text | data | notebook
+    kind: str  # code | doc | text | data | notebook | pdf
     symbols: list[str] = field(default_factory=list)
 
 
@@ -194,21 +194,41 @@ def _notebook(text: str, max_chars: int) -> list[Chunk]:
             source = "".join(source)
         if source.strip():
             blocks.append((number, f"# --- cell {number} [{cell.get('cell_type', 'code')}] ---\n{source.strip()}"))
+    return _numbered_blocks(blocks, max_chars, "notebook")
 
+
+_PAGE_HEADER = re.compile(r"--- page (\d+) ---")
+
+
+def page_header(number: int) -> str:
+    """The line that starts each page's text in a PDF's chunks."""
+    return f"--- page {number} ---"
+
+
+def page_number(line: str) -> int | None:
+    """The page number if `line` is a page_header(), else None."""
+    match = _PAGE_HEADER.fullmatch(line)
+    return int(match.group(1)) if match else None
+
+
+def _numbered_blocks(blocks: list[tuple[int, str]], max_chars: int, kind: str) -> list[Chunk]:
+    """Pack numbered blocks (notebook cells, PDF pages) into chunks whose start and end
+    are block numbers. A block too big for one chunk is split into line windows that all
+    carry its number."""
     chunks: list[Chunk] = []
     group: list[tuple[int, str]] = []
     size = 0
 
     def flush() -> None:
         if group:
-            chunks.append(Chunk("\n\n".join(b for _, b in group), group[0][0], group[-1][0], "notebook"))
+            chunks.append(Chunk("\n\n".join(b for _, b in group), group[0][0], group[-1][0], kind))
 
     for number, block in blocks:
         if len(block) > max_chars:
             flush()
             group, size = [], 0
             block_lines = block.split("\n")
-            for piece in line_windows(block_lines, 0, len(block_lines) - 1, max_chars, "notebook"):
+            for piece in line_windows(block_lines, 0, len(block_lines) - 1, max_chars, kind):
                 piece.start_line = piece.end_line = number
                 chunks.append(piece)
             continue
@@ -293,6 +313,11 @@ class Chunker:
             else:
                 chunks = line_windows(lines, 0, len(lines) - 1, self.max_chars, "text")
         return [c for c in chunks if c.text.strip()]
+
+    def chunk_pages(self, pages: list[str]) -> list[Chunk]:
+        """Chunks of a PDF's page texts (pdf.read_pdf), numbered by page."""
+        blocks = [(n, f"{page_header(n)}\n{text.strip()}") for n, text in enumerate(pages, 1) if text.strip()]
+        return _numbered_blocks(blocks, self.max_chars, "pdf")
 
     def _code(self, language: str, text: str, lines: list[str], tree=None) -> list[Chunk]:
         if tree is None:

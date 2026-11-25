@@ -16,6 +16,7 @@ import numpy as np
 
 from ..index.store import STOPWORDS, Store, StoredChunk, SymbolRow
 from ..ingest.chunking import CODE_LANGUAGES, DOC_EXTENSIONS, NOTEBOOK_EXTENSIONS
+from ..ingest.pdf import PDF_EXTENSIONS
 from ..ingest.profiling import PROFILE_EXTENSIONS
 from .answer import build_messages
 from .retrieval import Hit, QueryEmbedder, search
@@ -33,7 +34,7 @@ CODE_KINDS = ("function", "method", "class", "interface", "module", "macro")
 _TOKEN = re.compile(r"`?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(`|\(\))?")
 _FILE_TOKEN = re.compile(r"[\w./\\-]*\w\.[A-Za-z][A-Za-z0-9]{0,6}\b")
 _FILE_EXTENSIONS = (
-    set(CODE_LANGUAGES) | DOC_EXTENSIONS | NOTEBOOK_EXTENSIONS | PROFILE_EXTENSIONS
+    set(CODE_LANGUAGES) | DOC_EXTENSIONS | NOTEBOOK_EXTENSIONS | PROFILE_EXTENSIONS | PDF_EXTENSIONS
     | {".txt", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".xml", ".html", ".css", ".rst", ".bat", ".cmd"}
 )
 

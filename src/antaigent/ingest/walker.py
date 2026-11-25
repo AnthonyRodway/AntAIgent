@@ -35,7 +35,7 @@ SKIP_EXTENSIONS = frozenset(
     .exe .dll .so .dylib .o .a .lib .obj .pdb .class .pyc .pyo .pyd .bin
     .mp3 .mp4 .wav .avi .mov .mkv .flac .ogg .m4a
     .ttf .otf .woff .woff2 .eot
-    .pdf .doc .docx .xls .ppt .pptx .odt .ods
+    .doc .docx .xls .ppt .pptx .odt .ods
     .feather .arrow .pkl .pickle .npy .npz .h5 .hdf5 .nc .mat .sav .rds .rdata
     .mdb .accdb
     .shp .shx .dbf .sbn .sbx .cpg .img .ecw .sid .las .laz

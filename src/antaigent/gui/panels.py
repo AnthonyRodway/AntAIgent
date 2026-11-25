@@ -39,6 +39,8 @@ from PySide6.QtWidgets import (
 
 from ..chats import SavedTurn, make_title
 from ..index.summarize import file_text
+from ..ingest.chunking import page_number
+from ..ingest.pdf import PDF_EXTENSIONS
 from ..query.context import CODE_KINDS
 from ..query.retrieval import Hit
 from .render import esc, file_link, link, markdown_html, muted, symbol_link
@@ -485,7 +487,7 @@ class SearchPanel(QWidget):
         if not rows:
             return
         c = self.hits[rows[0].row()].chunk
-        lined = c.kind not in ("data", "notebook")
+        lined = c.kind not in ("data", "notebook", "pdf")
         self.preview.set_code(c.text, c.path if lined else "", first_line=c.start_line if lined else 1)
 
     def _open(self, row: int, _col: int) -> None:
@@ -496,11 +498,37 @@ class SearchPanel(QWidget):
 # --- File ------------------------------------------------------------------------------
 
 
+def page_lines(text: str, pages: tuple[int, int] | None) -> tuple[int, int] | None:
+    """The lines of a PDF's indexed text that hold pages start..end, for highlighting."""
+    if not pages:
+        return None
+    start, end = pages
+    lines = text.split("\n")
+    first = None
+    last = len(lines)
+    for i, line in enumerate(lines, 1):
+        number = page_number(line)
+        if number is None:
+            continue
+        if first is None and number >= start:  # a page without text has no header
+            first = i
+        if number > end:
+            last = max(i - 1, first or 0)
+            break
+    if first is None:
+        return None
+    while last > first and not lines[last - 1].strip():
+        last -= 1
+    return first, last
+
+
 class FilePanel(QWidget):
     def __init__(self, main: MainWindow):
         super().__init__()
         self.main = main
         self.path: str | None = None
+        self._kind = ""  # the shown file's chunk kind; "pdf" for any PDF
+        self._text = ""
         self.title = QLabel("Pick a file in the sidebar, or click a citation.")
         self.title.setTextFormat(Qt.TextFormat.PlainText)  # file names aren't markup
         self.title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -528,6 +556,7 @@ class FilePanel(QWidget):
 
     def clear(self) -> None:
         self.path = None
+        self._kind = self._text = ""
         self.title.setText("Pick a file in the sidebar, or click a citation.")
         self.subtitle.setText("")
         self.code.set_code("")
@@ -540,7 +569,7 @@ class FilePanel(QWidget):
             return False
         mark = (start, end or start) if start else None
         if path == self.path:
-            self.code.mark_lines(mark)
+            self.code.mark_lines(self._lines(mark))
             return True
         record = store.file(path)
         if record is None:
@@ -557,6 +586,11 @@ class FilePanel(QWidget):
             text = file_text(chunks)
             notes.append("data profile" if kind == "data" else "notebook cells")
             self.code.set_code(text, mark=None)
+        elif posixpath.splitext(path)[1].lower() in PDF_EXTENSIONS:
+            kind = "pdf"
+            text = file_text(chunks) or "(No text was read from this PDF.)"
+            notes.append("text read from the PDF")
+            self.code.set_code(text, mark=page_lines(text, mark))
         else:
             text, note = self._read(root / path, chunks)
             if note:
@@ -568,11 +602,18 @@ class FilePanel(QWidget):
                 notes.append("changed since it was learned")
         except OSError:
             notes.append("no longer on disk")
-        self.path = path
+        self.path, self._kind, self._text = path, kind, text
         self.title.setText(path)
         self.subtitle.setText(" | ".join(notes))
         self.info.setHtml(_page(self.main.theme, self._info(path)))
         return True
+
+    def _lines(self, mark: tuple[int, int] | None) -> tuple[int, int] | None:
+        """A citation's span as lines of the shown text: PDF citations give pages, and
+        notebook and data citations give cells or nothing, which can't be marked."""
+        if self._kind == "pdf":
+            return page_lines(self._text, mark)
+        return None if self._kind in ("data", "notebook") else mark
 
     @staticmethod
     def _read(full_path, chunks) -> tuple[str, str]:

@@ -20,6 +20,7 @@ dependencies = [
     "duckdb>=1.1",
     "openpyxl>=3.1",
     "defusedxml>=0.7",  # openpyxl uses it, when installed, to read workbooks safely
+    "pypdf>=7.0",  # newer releases cap how far a PDF's streams can expand
     "watchfiles>=0.21",
     "markdown-it-py>=3.0",
     "pygments>=2.17",

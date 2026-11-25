@@ -22,6 +22,7 @@ class Settings:
     keep_alive: str = "30m"
     home: Path = Path.home() / ".antai"
     max_file_bytes: int = 1_000_000
+    max_pdf_bytes: int = 2_000_000
     chunk_chars: int = 2400
     embed_batch: int = 32
     top_k: int = 12

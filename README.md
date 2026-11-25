@@ -113,6 +113,14 @@ of each table's columns. That lets `ask` answer questions like "which file has t
 column?" or "what are the possible values of status?". Profiling uses DuckDB and runs
 locally; files over 200 MB are profiled from a 500,000-row sample.
 
+### PDFs
+
+PDFs up to 2,000 KB are read page by page (with pypdf, locally), along with any values
+filled into their form fields, so answers can cite the pages they use, such as
+`report.pdf:3-4`. Scanned pages are pictures, not text, so a scanned PDF is listed as
+skipped until it has been through OCR. Password-protected PDFs are skipped too. PDFs that
+were skipped before this was added are read on the next `learn`.
+
 ## Configuration
 
 Every setting can be overridden with an environment variable:
@@ -129,6 +137,7 @@ Every setting can be overridden with an environment variable:
 | `ANTAI_CONTEXT_CHARS` | `30000` | Upper bound on excerpt text sent to the model |
 | `ANTAI_CHUNK_CHARS` | `2400` | Target chunk size (changing it rebuilds the index) |
 | `ANTAI_MAX_FILE_BYTES` | `1000000` | Larger files are skipped (CSV/TSV are previewed instead) |
+| `ANTAI_MAX_PDF_BYTES` | `2000000` | Larger PDFs are skipped |
 | `ANTAI_HOME` | `~/.antai` | Where indexes are stored |
 | `ANTAI_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama server. Proxy settings are ignored for a local address, so requests can't detour through a proxy. Pointing this at another machine sends your files and questions there; `antai doctor` warns when it does. |
 
@@ -136,9 +145,9 @@ Every setting can be overridden with an environment variable:
 
 1. **Walk** the folder, applying ignore rules and skipping binary or oversized files.
 2. **Chunk** each file so that it keeps its line numbers. Code is split along functions,
-   classes and methods using tree-sitter. Markdown is split by heading and notebooks by
-   cell, data files become profiles, and anything else is split into overlapping line
-   windows.
+   classes and methods using tree-sitter. Markdown is split by heading, notebooks by
+   cell and PDFs by page, data files become profiles, and anything else is split into
+   overlapping line windows.
 3. **Map the code**: tree-sitter's tags queries find each definition (with its enclosing
    class, e.g. `Store.put_file`) and each call site (with the function it's in). Imports
    are found per language and resolved to project files where possible.
@@ -183,7 +192,8 @@ src/antaigent/
 | `chats.py` | Saves the app's conversations per project in `chats.db`, beside the index so rebuilds don't erase them. |
 | `__main__.py` | Lets you run the tool as `python -m antaigent` as well as `antai`. |
 | `ingest/walker.py` | Finds the files worth indexing in a folder, applying `.gitignore`, `.antaiignore` and the built-in skip lists. |
-| `ingest/chunking.py` | Splits each file into chunks that keep their line numbers: code by function and class (tree-sitter), Markdown by heading, notebooks by cell, and other text in line windows. |
+| `ingest/chunking.py` | Splits each file into chunks that keep their line numbers: code by function and class (tree-sitter), Markdown by heading, notebooks by cell, PDFs by page, and other text in line windows. |
+| `ingest/pdf.py` | Reads a PDF's text page by page with pypdf, adding the values filled into its form fields, and says why a PDF can't be read (password protected, scanned, damaged). |
 | `ingest/profiling.py` | Profiles CSV, TSV, Parquet and Excel files with DuckDB (types, ranges, common values, empties, sample rows) and describes SQLite and GeoPackage tables. |
 | `ingest/graph.py` | Finds definitions and call sites with tree-sitter tags queries, finds imports for each language, and resolves imports to project files. |
 | `index/indexer.py` | Runs `learn`: walks the folder, works out which files changed, reads them a few at a time, then chunks, profiles and maps them. Each batch of chunks is embedded on a background thread while the next is prepared, and saved to the store in one transaction. |
@@ -211,7 +221,7 @@ src/antaigent/
 | `gui.py` | `antai gui`: opens the desktop app. |
 | `status.py` | `antai status`: summarizes a project's index (files, chunks, code graph, summaries, embedding model, last run) and lists skipped files with the reason. |
 | `projects.py` | `antai projects`: lists every learned folder and whether its index still exists. |
-| `doctor.py` | `antai doctor`: checks Ollama, the models, GPU use, the code parsers, and the optional extras (DuckDB, openpyxl, watchfiles, PySide6). |
+| `doctor.py` | `antai doctor`: checks Ollama, the models, GPU use, the code parsers, and the optional extras (DuckDB, openpyxl, pypdf, watchfiles, PySide6). |
 | `setup.py` | `antai setup`: one-time download of the code parsers, plus a check for the Ollama models. |
 | `_common.py` | Helpers the commands share: console output, error messages, the `--path` option, and opening the right project's index. |
 
@@ -227,7 +237,7 @@ src/antaigent/
 | `workers.py` | Background jobs (learn, summarize, ask, search, watch, Ollama status), each on its own thread with its own database connection, and the warm-up that loads the models while a question is typed. |
 
 The tests in `tests/` cover file discovery (`test_walker.py`), chunking (`test_chunking.py`),
-data profiling (`test_profiling.py`), the code graph (`test_graph.py`), indexing, incremental
+data profiling (`test_profiling.py`), PDFs (`test_pdf.py`), the code graph (`test_graph.py`), indexing, incremental
 updates, graph upkeep and search (`test_index_and_search.py`), learning when Ollama fails or is
 cancelled part way (`test_learn_pipeline.py`), summaries (`test_summarize.py`), the Ollama
 client (`test_ollama.py`), saved chats (`test_chats.py`), watching (`test_watch.py`), the

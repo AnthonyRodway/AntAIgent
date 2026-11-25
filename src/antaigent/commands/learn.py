@@ -58,6 +58,7 @@ def learn(
                 report = learn_folder(
                     path, store, embedder,
                     max_file_bytes=settings.max_file_bytes,
+                    max_pdf_bytes=settings.max_pdf_bytes,
                     chunk_chars=settings.chunk_chars,
                     full=full,
                     progress=on_progress,

@@ -59,7 +59,7 @@ def file_text(chunks: list[StoredChunk]) -> str:
     parts: list[str] = []
     last_end = 0
     for c in chunks:
-        if c.kind in ("data", "notebook"):
+        if c.kind in ("data", "notebook", "pdf"):
             parts.append(("\n" if parts else "") + c.text)
             continue
         lines = c.text.split("\n")
